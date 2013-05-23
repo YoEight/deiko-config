@@ -1,0 +1,5 @@
+*~
+cabal-dev/
+dist/
+data/
+*Lexer.hs
