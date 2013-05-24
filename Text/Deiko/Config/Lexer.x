@@ -25,6 +25,14 @@ tokens :-
   <0> \,                        { token (\_ _ -> COMMA) }
   <0> $char+                    { token (\(_, _, _, s) n -> ID (take n s) ) }
   <0> \"                        { startString `andBegin` string }
+  <0> \"\"\"@rubbish            { startString `andBegin` raw_string }
+  <raw_string> @rubbish\"\"\"   { makeString `andBegin` 0 }
+  <raw_string> \"               { appendStringValueWith "\""}
+  <raw_string> @rubbish         { appendStringValueWith " "}
+  <raw_string> \b               { appendStringValueWith "\b" }
+  <raw_string> \t               { appendStringValueWith "\t" }
+  <raw_string> \f               { appendStringValueWith "\f" }
+  <raw_string> (. # \")+        { appendStringValue }
   <string> (. # [\"])+          { appendStringValue }
   <string> \n                   { \_ _ -> alexError "Non-terminated string" }
   <string> \"                   { makeString `andBegin` 0 } 
@@ -104,7 +112,9 @@ lexer input = runAlex input loop
    
     go EOF = 
       do depth <- getObjectDepth
-         when (depth /= 0) (alexError "unclosed brace")
+         code  <- alexGetStartCode
+         when (code == raw_string) (alexError "Non-terminated raw string")
+         when (depth /= 0) (alexError "Unclosed brace")
          return [EOF]
     go x   = liftM (x:) loop
 
