@@ -15,6 +15,7 @@ import Prelude hiding (EQ)
 %token
   propid        { ID $$ }
   string        { STRING $$ }
+  subst         { SUBST $$ }
   end           { NEWLINE }
   '{'           { LBRACE }
   '}'           { RBRACE }
@@ -25,13 +26,14 @@ import Prelude hiding (EQ)
   '.'           { DOT }
   '='           { EQ }
   '?'           { INTER }
-  '_'           { SPACE }
-  '$'           { DOLLAR }    
+  '_'           { SPACE }   
        
 %%
 
 Base : PropList                           { Root $1 }
-     | PropList end                       { Root $1 }
+     | PropList End                       { Root $1 }
+
+End : end                                 { () }
 
 PropList :                                { [] }
          | Prop                           { [$1] }
@@ -56,7 +58,7 @@ ObjPropList : PropList ObjEnd         { POBJECT (Object $1) }
 ObjEnd : end '}'                    { [] }
        | '}'                        { [] }
 
-ObjTail :  Obj                       { [$1] }
+ObjTail : Obj                       { [$1] }
         | ObjTail2 '_' Obj           { $1 ++ [$3] }
 
 ObjTail2 :                           { [] }
@@ -64,6 +66,7 @@ ObjTail2 :                           { [] }
 
 Value : string                              { PSTRING $1 }
       | propid                              { PSTRING $1 }
+      | subst                               { PSUBST $1 }
 
 {
 data Root = Root [Prop] deriving Show
@@ -74,7 +77,8 @@ data Prop = Prop { propName    :: String
 data PropValue = PSTRING String
                | PLIST [PropValue]
                | POBJECT Object
-               | PCONCAT [PropValue] deriving Show
+               | PCONCAT [PropValue] 
+               | PSUBST String deriving Show
 
 data Object = Object [Prop] deriving Show
 
