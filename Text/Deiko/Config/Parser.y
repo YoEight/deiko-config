@@ -21,7 +21,6 @@ import Prelude hiding (EQ)
   '}'           { RBRACE }
   '['           { LBRACK }
   ']'           { RBRACK }
-  ':'           { COLON }
   ','           { COMMA }
   '.'           { DOT }
   '='           { EQ }

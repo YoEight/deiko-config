@@ -19,7 +19,7 @@ tokens :-
   <0> \}                        { setToken (\x -> x - 1) RBRACE }
   <0> \[                        { token (\_ _ -> LBRACK) }
   <0> \]                        { token (\_ _ -> RBRACK) }
-  <0> $space*\=$space*          { token (\_ _ -> EQ) }
+  <0> $space*[\=\:]$space*      { token (\_ _ -> EQ) }
   <0> \?                        { token (\_ _ -> INTER) }
   <0> \$\{                      { begin subst }
   <0> \#.*@rubbish              { skip }
@@ -51,7 +51,6 @@ data Token = ID String
            | LBRACK
            | RBRACK
            | EQ
-           | COLON
            | INTER
            | DOLLAR
            | SHARP
