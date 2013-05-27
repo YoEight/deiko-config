@@ -1,4 +1,6 @@
 {
+module Text.Deiko.Config.Lexer where
+
 import Prelude hiding (EQ)
 import Control.Monad (liftM, when)
 }
@@ -11,13 +13,13 @@ $newline = \n
 @rubbish = [$newline $space]*
 
 tokens :-
-  <0> $newline+@rubbish         { token (\_ _ -> NEWLINE) } 
+  <0> $space*$newline+@rubbish  { token (\_ _ -> NEWLINE) } 
   <0> $space+                   { token (\_ _ -> SPACE) }
-  <0> \{@rubbish                { setToken (+1) LBRACE }
-  <0> \}@rubbish                { setToken (\x -> x - 1) RBRACE }
+  <0> \{                        { setToken (+1) LBRACE }
+  <0> \}                        { setToken (\x -> x - 1) RBRACE }
   <0> \[                        { token (\_ _ -> LBRACK) }
   <0> \]                        { token (\_ _ -> RBRACK) }
-  <0> \=                        { token (\_ _ -> EQ) }
+  <0> $space*\=$space*          { token (\_ _ -> EQ) }
   <0> \?                        { token (\_ _ -> INTER) }
   <0> \$                        { token (\_ _ -> DOLLAR) }
   <0> \#.*@rubbish              { skip }
@@ -103,13 +105,17 @@ startString i r =
 setToken f token _ _ =
   do modifyObjectDepth f
      return token
-          
 
-lexer :: String -> Either String [Token]
-lexer input = runAlex input loop
+getState = Alex $ \x -> Right (x, x)
+
+getPosn = do
+  AlexState (AlexPn x l c) _ _ _ _ _ <- getState
+  return (x, l, c)
+
+lexerP :: String -> Either String [Token]
+lexerP input = runAlex input loop
   where
     loop = alexMonadScan >>= go
-   
     go EOF = 
       do depth <- getObjectDepth
          code  <- alexGetStartCode
@@ -117,5 +123,16 @@ lexer input = runAlex input loop
          when (depth /= 0) (alexError "Unclosed brace")
          return [EOF]
     go x   = liftM (x:) loop
+          
+lexer :: (Token -> Alex a) -> Alex a
+lexer k = alexMonadScan >>= go
+  where
+    go EOF = 
+      do depth <- getObjectDepth
+         code  <- alexGetStartCode
+         when (code == raw_string) (alexError "Non-terminated raw string")
+         when (depth /= 0) (alexError "Unclosed brace")
+         k EOF
+    go x   = k x
 
 }
