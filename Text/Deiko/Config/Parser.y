@@ -1,5 +1,9 @@
 {
-module Text.Deiko.Config.Parser where
+module Text.Deiko.Config.Parser (parseConfig
+                                ,Root(..)
+                                ,Prop(..)
+                                ,PropValue(..)
+                                ,Object(..)) where
 
 import Text.Deiko.Config.Lexer
 
@@ -103,4 +107,8 @@ returnAlex = return
 parseError t = do
   (_, l, c) <- getPosn
   alexError ("l" ++ (show l) ++ ", c" ++ (show c) ++ " on token " ++ (show t))
+
+parseConfig :: String -> Either String Root
+parseConfig s = runAlex s parser
+
 }

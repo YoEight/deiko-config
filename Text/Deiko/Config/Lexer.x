@@ -1,5 +1,11 @@
 {
-module Text.Deiko.Config.Lexer where
+module Text.Deiko.Config.Lexer (simpleLex
+                               ,lexer
+                               ,alexError
+                               ,getPosn
+                               ,runAlex
+                               ,Alex
+                               ,Token(..)) where
 
 import Prelude hiding (EQ)
 import Control.Monad (liftM, when)
@@ -112,8 +118,8 @@ getPosn = do
   AlexState (AlexPn x l c) _ _ _ _ _ <- getState
   return (x, l, c)
 
-lexerP :: String -> Either String [Token]
-lexerP input = runAlex input loop
+simpleLex :: String -> Either String [Token]
+simpleLex input = runAlex input loop
   where
     loop = alexMonadScan >>= go
     go EOF = 
