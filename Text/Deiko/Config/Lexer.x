@@ -17,7 +17,7 @@ tokens :-
   <0> $space+                   { token (\_ _ -> SPACE) }
   <0> \{                        { setToken (+1) LBRACE }
   <0> \}                        { setToken (\x -> x - 1) RBRACE }
-  <0> \[                        { token (\_ _ -> LBRACK) }
+  <0> \[@rubbish                { token (\_ _ -> LBRACK) }
   <0> \]                        { token (\_ _ -> RBRACK) }
   <0> $space*[\=\:]$space*      { token (\_ _ -> EQ) }
   <0> \$\{                      { begin subst }

@@ -16,29 +16,33 @@ import Prelude hiding (EQ)
   propid        { ID $$ }
   string        { STRING $$ }
   subst         { SUBST $$ }
-  end           { NEWLINE }
+  newline       { NEWLINE }
   '{'           { LBRACE }
   '}'           { RBRACE }
   '['           { LBRACK }
   ']'           { RBRACK }
   ','           { COMMA }
   '='           { EQ }
-  '_'           { SPACE }   
+  '_'           { SPACE } 
+  '.'           { DOT }  
        
 %%
 
 Base : PropList                         { Root $1 }
-     | PropList end                     { Root $1 }
+     | PropList newline                 { Root $1 }
      |                                  { Root [] }
 
 PropList : Prop                         { [$1] }
-         | PropList end Prop            { $1 ++ [$3] }
+         | PropList newline Prop            { $1 ++ [$3] }
          | PropList ',' '_' Prop        { $1 ++ [$4] }  
-         | PropList ',' end Prop        { $1 ++ [$4] }            
+         | PropList ',' newline Prop    { $1 ++ [$4] }            
          | PropList ',' Prop            { $1 ++ [$3] }
 
-Prop : propid '_' PropTail              { Prop $1 $3 }
-     | propid PropTail                  { Prop $1 $2 } 
+Prop : Ident '_' PropTail               { Prop $1 $3 }
+     | Ident PropTail                   { Prop $1 $2 }
+
+Ident : propid                          { PSTRING $1 }
+      | Ident '.' propid                { PIDENT $1 (PSTRING $3) }
 
 PropTail : '=' PropTail1                { mkValue $2 }          
          | Obj                          { $1 }    
@@ -48,29 +52,41 @@ PropTail1 : Value                       { [$1] }
           | PropTail1 '_' Value         { $1 ++ [$3] }
 
 Obj : '{' '_' ObjPropList                { $3 }
-    | '{' end ObjPropList                { $3 }
+    | '{' newline ObjPropList            { $3 }
     | '{' ObjPropList                    { $2 }
 
 ObjPropList : PropList ObjEnd           { POBJECT (Object $1) }
 
 ObjEnd : '}'                            { () }
-       | end '}'                        { () }
+       | newline '}'                    { () }
+
+List : '[' ListTail ']'                 { PLIST $2 }
+
+ListTail :                              { [] }
+         | Value                        { [$1] }
+         | ListTail '_'                 { $1 }
+         | ListTail newline             { $1 }
+         | ListTail ',' '_' Value       { $1 ++ [$4] }  
+         | ListTail ',' newline Value   { $1 ++ [$4] }  
+         | ListTail ',' Value           { $1 ++ [$3] }
 
 Value : string                          { PSTRING $1 }
       | propid                          { PSTRING $1 }
       | subst                           { PSUBST $1 }
       | Obj                             { $1 }
+      | List                            { $1 }
 
 {
 data Root = Root [Prop] deriving Show
 
-data Prop = Prop { propName    :: String
+data Prop = Prop { propName    :: PropValue
                  , propValue   :: PropValue } deriving Show
 
 data PropValue = PSTRING String
                | PLIST [PropValue]
                | POBJECT Object
                | PCONCAT [PropValue] 
+               | PIDENT PropValue PropValue
                | PSUBST String deriving Show
 
 data Object = Object [Prop] deriving Show
