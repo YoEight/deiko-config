@@ -20,7 +20,6 @@ tokens :-
   <0> \[                        { token (\_ _ -> LBRACK) }
   <0> \]                        { token (\_ _ -> RBRACK) }
   <0> $space*[\=\:]$space*      { token (\_ _ -> EQ) }
-  <0> \?                        { token (\_ _ -> INTER) }
   <0> \$\{                      { begin subst }
   <0> \#.*@rubbish              { skip }
   <0> \.                        { token (\_ _ -> DOT) }
@@ -38,7 +37,7 @@ tokens :-
   <string> (. # [\"])+          { appendStringValue }
   <string> \n                   { \_ _ -> alexError "Non-terminated string" }
   <string> \"                   { makeString `andBegin` 0 }
-  <subst> $char+                { token (\(_, _, _, s) n -> SUBST (take n s)) }
+  <subst> \??$char+(\.$char+)?  { token (\(_, _, _, s) n -> SUBST (take n s)) }
   <subst> \}                    { begin 0 }
   <subst> .                     { \_ _ -> alexError "Invalid character in string substitution" }
 
@@ -51,8 +50,6 @@ data Token = ID String
            | LBRACK
            | RBRACK
            | EQ
-           | INTER
-           | DOLLAR
            | SHARP
            | SPACE
            | NEWLINE

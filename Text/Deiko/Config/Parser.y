@@ -22,50 +22,44 @@ import Prelude hiding (EQ)
   '['           { LBRACK }
   ']'           { RBRACK }
   ','           { COMMA }
-  '.'           { DOT }
   '='           { EQ }
-  '?'           { INTER }
   '_'           { SPACE }   
        
 %%
 
-Base : PropList                           { Root $1 }
-     | PropList End                       { Root $1 }
+Base : PropList                         { Root $1 }
+     | PropList end                     { Root $1 }
+     |                                  { Root [] }
 
-End : end                                 { () }
+PropList : Prop                         { [$1] }
+         | PropList end Prop            { $1 ++ [$3] }
+         | PropList ',' '_' Prop        { $1 ++ [$4] }  
+         | PropList ',' end Prop        { $1 ++ [$4] }            
+         | PropList ',' Prop            { $1 ++ [$3] }
 
-PropList :                                { [] }
-         | Prop                           { [$1] }
-         | PropList end Prop              { $1 ++ [$3] }
-         | PropList ',' Prop              { $1 ++ [$3] }              
+Prop : propid '_' PropTail              { Prop $1 $3 }
+     | propid PropTail                  { Prop $1 $2 } 
 
-Prop : propid PropTail2                   { Prop $1 $2 } 
+PropTail : '=' PropTail1                { mkValue $2 }          
+         | Obj                          { $1 }    
 
-PropTail2 : '=' PropTail4                 { mkValue $2 }       
-          | '=' ObjTail                   { mkValue $2 }    
-          | ObjTail                       { mkValue $1 }    
+PropTail1 : Value                       { [$1] }
+          | PropTail1 '_'               { $1 }
+          | PropTail1 '_' Value         { $1 ++ [$3] }
 
-PropTail4 : Value                       { [$1] }
-          | PropTail4 '_'               { $1 }
-          | PropTail4 '_' Value         { $1 ++ [$3] }
+Obj : '{' '_' ObjPropList                { $3 }
+    | '{' end ObjPropList                { $3 }
+    | '{' ObjPropList                    { $2 }
 
-Obj : '{' '_' ObjPropList               { $3 }
-    | '{' ObjPropList                   { $2 }
+ObjPropList : PropList ObjEnd           { POBJECT (Object $1) }
 
-ObjPropList : PropList ObjEnd         { POBJECT (Object $1) }
+ObjEnd : '}'                            { () }
+       | end '}'                        { () }
 
-ObjEnd : end '}'                    { [] }
-       | '}'                        { [] }
-
-ObjTail : Obj                       { [$1] }
-        | ObjTail2 '_' Obj           { $1 ++ [$3] }
-
-ObjTail2 :                           { [] }
-         | ObjTail                   { $1 }
-
-Value : string                              { PSTRING $1 }
-      | propid                              { PSTRING $1 }
-      | subst                               { PSUBST $1 }
+Value : string                          { PSTRING $1 }
+      | propid                          { PSTRING $1 }
+      | subst                           { PSUBST $1 }
+      | Obj                             { $1 }
 
 {
 data Root = Root [Prop] deriving Show
