@@ -1,39 +1,62 @@
 module Text.Deiko.Config.Semantic where
 
-import Control.Monad            (when, (>=>))
+import           Control.Monad            (when, (>=>))
+import           Control.Monad.State
+import           Control.Monad.Trans      (lift)
 
-import Data.Foldable            (traverse_)
-import Data.Traversable         (traverse)
+import           Data.Foldable            (traverse_)
+import qualified Data.Map                 as M
+import           Data.Traversable         (traverse)
 
-import Text.Deiko.Config.Parser (Object (..), Prop (..), PropValue (..),
-                                 Root (..), parseConfig)
+import           Text.Deiko.Config.Parser (Object (..), Prop (..),
+                                           PropValue (..), Root (..),
+                                           parseConfig)
 
 data Type = Defined String
           | Joker
 
+type Register = M.Map String PropValue
+
+emptyRegister :: Register
+emptyRegister = M.empty
+
+register :: PropValue -> PropValue -> StateT Register (Either String) ()
+register path value =
+  modify (M.insertWith const (showPath path) value)
+
+failure :: String -> StateT Register (Either String) a
+failure = lift . Left
+
 showType :: Type -> String
-showType Joker       = "*jocker*"
+showType Joker       = "*joker*"
 showType (Defined x) = x
 
-checking :: Root -> Either String Root
-checking (Root props) = fmap Root (traverse go props)
+checking :: Root -> Either String (Root, Register)
+checking r@(Root props) =
+  fmap mk (execStateT (traverse_ go props) emptyRegister)
   where
-    go p@(Prop _ value) = checkValue value >>
-                          return p
+    mk reg = (r, reg)
 
-    checkValue (PCONCAT (x:xs)) =
+    go p@(Prop ident value) = checkValue ident value
+
+    checkValue ident v@(PCONCAT (x:xs)) =
       let definedType = getType x in
-      checkConcatType definedType xs
-    checkValue (POBJECT (Object props)) =
-      traverse_ go props
-    checkValue _ = return ()
+      checkConcatType ident definedType xs >>
+      register ident v
+    checkValue ident v@(POBJECT (Object props)) =
+      let step (Prop pid value) =
+            checkValue (PIDENT ident pid) value in
+      traverse_ step props >>
+      register ident v
+    checkValue ident v = register ident v
 
-    checkConcatType defType (x:xs) =
-      let typ = getType x in
+    checkConcatType ident defType (x:xs) =
+      let typ  = getType x
+          path = showPath ident in
       when (not (typecheck defType typ))
-             (Left (concatErrorMsg defType typ)) >>
-      checkConcatType (switchType defType typ) xs
-    checkConcatType _ [] = return ()
+             (failure (concatErrorMsg path defType typ)) >>
+      checkConcatType ident (switchType defType typ) xs
+    checkConcatType _ _ [] = return ()
 
     typecheck Joker _                 = True
     typecheck _ Joker                 = True
@@ -47,8 +70,13 @@ checking (Root props) = fmap Root (traverse go props)
     getType (POBJECT _) = Defined "object"
     getType (PSTRING _) = Defined "string"
 
-concatErrorMsg expected actual =
-  "Concatenation doesn't typecheck. expected: " ++
+
+showPath :: PropValue -> String
+showPath (PSTRING x)  = x
+showPath (PIDENT x y) = (showPath x) ++ "." ++ (showPath) y
+
+concatErrorMsg prop expected actual =
+  "Concatenation doesn't typecheck for property " ++ prop ++ "; expected: " ++
   (showType expected) ++ ", actual: " ++ (showType actual)
 
 

@@ -10,6 +10,7 @@ import Text.Deiko.Config.Lexer
 import Prelude hiding (EQ)
 }
 
+%expect 1
 %name parser
 %tokentype { Token }
 %monad { Alex } { thenAlex } { returnAlex }
@@ -34,10 +35,11 @@ import Prelude hiding (EQ)
 
 Base : PropList                         { Root $1 }
      | PropList newline                 { Root $1 }
+     | PropList '_'                     { Root $1 }
      |                                  { Root [] }
 
 PropList : Prop                         { [$1] }
-         | PropList newline Prop            { $1 ++ [$3] }
+         | PropList newline Prop        { $1 ++ [$3] }
          | PropList ',' '_' Prop        { $1 ++ [$4] }  
          | PropList ',' newline Prop    { $1 ++ [$4] }            
          | PropList ',' Prop            { $1 ++ [$3] }
@@ -52,15 +54,13 @@ PropTail : '=' PropTail1                { mkValue $2 }
          | Obj                          { $1 }    
 
 PropTail1 : Value                       { [$1] }
-          | PropTail1 '_'               { $1 }
           | PropTail1 '_' Value         { $1 ++ [$3] }
 
-Obj : '{' '_' ObjPropList                { $3 }
-    | '{' newline ObjPropList            { $3 }
-    | '{' ObjPropList                    { $2 }
+Obj : '{' ObjPropList                   { $2 }
 
 ObjPropList : PropList ObjEnd           { POBJECT (Object $1) }
-
+            | ObjEnd                    { POBJECT (Object []) }
+             
 ObjEnd : '}'                            { () }
        | newline '}'                    { () }
 
