@@ -37,7 +37,9 @@ checking r@(Root props) =
   where
     mk reg = (r, reg)
 
-    go p@(Prop ident value) = checkValue ident value
+    go p@(Prop ident value) =
+      let (x, v) = liftValue ident value in
+      checkValue x v
 
     checkValue ident v@(PCONCAT (x:xs)) =
       let definedType = getType x in
@@ -69,6 +71,9 @@ checking r@(Root props) =
     getType (PLIST _)   = Defined "list"
     getType (POBJECT _) = Defined "object"
     getType (PSTRING _) = Defined "string"
+
+    liftValue x@(PSTRING _) v = (x, v)
+    liftValue (PIDENT x y) v  = liftValue x (POBJECT (Object [Prop y v]))
 
 
 showPath :: PropValue -> String
