@@ -1,6 +1,12 @@
-module Text.Deiko.Config.Semantic where
+module Text.Deiko.Config.Semantic (compile
+                                  ,Root
+                                  ,Prop(..)
+                                  ,PropValue(..)
+                                  ,Config
+                                  ,configRegister
+                                  ,Object) where
 
-import           Control.Monad            (when, (>=>))
+import           Control.Monad            (when, (<=<))
 import           Control.Monad.State
 import           Control.Monad.Trans      (lift)
 
@@ -15,7 +21,13 @@ import           Text.Deiko.Config.Parser (Object (..), Prop (..),
 data Type = Defined String
           | Joker
 
+data Config = Config { configRoot     :: Root
+                     , configRegister :: Register }
+
 type Register = M.Map String PropValue
+
+compile :: String -> Either String Config
+compile = semantic <=< parseConfig
 
 emptyRegister :: Register
 emptyRegister = M.empty
@@ -31,11 +43,11 @@ showType :: Type -> String
 showType Joker       = "*joker*"
 showType (Defined x) = x
 
-checking :: Root -> Either String (Root, Register)
-checking r@(Root props) =
+semantic :: Root -> Either String Config
+semantic r@(Root props) =
   fmap mk (execStateT (traverse_ go props) emptyRegister)
   where
-    mk reg = (r, reg)
+    mk reg = Config r reg
 
     go p@(Prop ident value) =
       let (x, v) = liftValue ident value in
