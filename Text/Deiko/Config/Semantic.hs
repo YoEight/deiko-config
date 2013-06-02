@@ -4,7 +4,8 @@ module Text.Deiko.Config.Semantic (compile
                                   ,PropValue(..)
                                   ,Config
                                   ,configRegister
-                                  ,Object) where
+                                  ,Register
+                                  ,Object(..)) where
 
 import           Control.Monad            (when, (<=<))
 import           Control.Monad.State
