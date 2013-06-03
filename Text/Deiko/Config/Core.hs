@@ -114,6 +114,14 @@ transform f onsub key reg (PCONCAT (x:xs)) =
         let f x y = (str $ propName x) == (str $ propName y)
             str (PSTRING x) = x in
         POBJECT (Object $ unionBy f ys xs)
+transform f onsub key reg (PLIST xs) =
+  f key =<< action
+  where
+    action = unwrapMonad $ fmap PLIST (traverse go xs)
+
+    go = WrapMonad . transform constM defaultSubstHandler key reg
+
+    constM = const return
 transform f _ key _ x = f key x
 
 defaultSubstHandler :: (CanReport e, MonadError e m) => String -> String -> m a
