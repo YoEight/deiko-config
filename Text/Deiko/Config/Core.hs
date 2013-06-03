@@ -3,7 +3,12 @@
 {-# LANGUAGE MultiParamTypeClasses  #-}
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE TypeSynonymInstances   #-}
-module Text.Deiko.Config.Core where
+module Text.Deiko.Config.Core (loadConfig
+                              ,getValue
+                              ,getValues
+                              ,HasConfig(..)
+                              ,CanReport(..)
+                              ,ConfigError(..)) where
 
 import           Control.Applicative        (WrappedMonad (..))
 import           Control.Monad.Error        (MonadError (..))
@@ -50,7 +55,7 @@ loadConfig path =
      either (throwError . configError . ConfigError) return (compile file)
 
 getValue :: (ConfigValue v, CanReport e, HasConfig r, MonadReader r m
-            , MonadError e m, Functor m)
+            , MonadError e m)
          => String
          -> m v
 getValue key =
@@ -58,7 +63,7 @@ getValue key =
            (reportError . propErrMsg) key
 
 getValues :: (ConfigValue v, CanReport e, HasConfig r, MonadReader r m
-             , MonadError e m, Functor m)
+             , MonadError e m)
           => String
           -> m [v]
 getValues key =
@@ -78,7 +83,7 @@ getEnv onSuccess onError key =
   do register <- asks (configRegister . getConfig)
      maybe (onError key) (onSuccess register) (M.lookup key register)
 
-transform :: (CanReport e, Monad m, Functor m, MonadError e m)
+transform :: (CanReport e, Monad m, MonadError e m)
           => (String -> PropValue -> m v)
           -> (String -> String -> m v) -- on susbstitution
           -> String
@@ -94,8 +99,10 @@ transform f onsub key reg (PSUBST sub) =
                   (transform f onsub key reg)
                   (M.lookup sub reg)
 transform f onsub key reg (PCONCAT (x:xs)) =
-  transform f onsub key reg =<< (execStateT (traverse_ concat xs) x)
+  transform f onsub key reg =<< action
     where
+      action = execStateT (unwrapMonad $ traverse_ (WrapMonad . concat) xs) x
+
       concat v =
         do acc <- get
            v1  <- lift $ transform (const return) defaultSubstHandler key reg v
