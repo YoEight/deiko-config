@@ -11,12 +11,14 @@ module Text.Deiko.Config.Core (loadConfig
                               ,ConfigError(..)) where
 
 import           Control.Applicative        (WrappedMonad (..))
+import           Control.Monad              (liftM)
 import           Control.Monad.Error        (MonadError (..))
 import           Control.Monad.Reader       (MonadReader, asks, runReaderT)
 import           Control.Monad.State        (execStateT, get, put)
 import           Control.Monad.Trans        (MonadIO (..), lift)
 import           Control.Monad.Trans.Either (runEitherT)
 
+import           Data.Char                  (isDigit)
 import           Data.Foldable              (traverse_)
 import           Data.List                  (unionBy)
 import qualified Data.Map                   as M
@@ -42,6 +44,13 @@ instance ConfigValue PropValue where
 instance ConfigValue String where
   configValue _ (PSTRING x) = return $ fromString x
   configValue key  x = reportError $ expErrMsg key "String" (showType x)
+
+instance ConfigValue Integer where
+  configValue _ (PSTRING xs)
+    | all isDigit xs = return $ read xs
+    | otherwise      = reportError $ ("Error when parsing an Int: value ["
+                                      ++ xs ++ "] is not a String")
+  configValue key x = reportError $ expErrMsg key "Int" (showType x)
 
 instance HasConfig Config where
   getConfig = id
