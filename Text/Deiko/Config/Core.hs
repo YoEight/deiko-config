@@ -52,6 +52,21 @@ instance ConfigValue Integer where
                                       ++ xs ++ "] is not a String")
   configValue key x = reportError $ expErrMsg key "Int" (showType x)
 
+instance ConfigValue Bool where
+  configValue _ (PSTRING xs) = makeBool xs
+    where
+      makeBool "True"  = return True
+      makeBool "true"  = return True
+      makeBool "Yes"   = return True
+      makeBool "yes"   = return True
+      makeBool "False" = return False
+      makeBool "false" = return False
+      makeBool "No"    = return False
+      makeBool "no"    = return False
+      makeBool x       = reportError ("Error when parsing a Bool: value ["
+                                     ++ x ++ "] is not a Bool")
+  configValue key x    = reportError $ expErrMsg key "Bool" (showType x)
+
 instance HasConfig Config where
   getConfig = id
 
