@@ -2,7 +2,7 @@ Small configuration library written in Haskell
 
 ##Overview
 
-Uses the same format of [Typesafe-config](https://github.com/typesafehub/config): HOCON
+Uses [Typesafe-config](https://github.com/typesafehub/config)'s format: HOCON
 
 HOCON stands for Human-Optimized Config Object Notation. It's basically a JSON superset
 
