@@ -48,8 +48,8 @@ instance ConfigValue String where
 instance ConfigValue Integer where
   configValue _ (PSTRING xs)
     | all isDigit xs = return $ read xs
-    | otherwise      = reportError $ ("Error when parsing an Int: value ["
-                                      ++ xs ++ "] is not a String")
+    | otherwise      = reportError $ ("Error when parsing an Integer: value ["
+                                      ++ xs ++ "] is not a Integer")
   configValue key x = reportError $ expErrMsg key "Int" (showType x)
 
 instance ConfigValue Bool where
