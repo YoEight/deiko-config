@@ -53,6 +53,7 @@ Then
 
 ```
 # In project's home directory
+
 $ alex Text/Deiko/Config/Lexer.x
 $ happy Text/Deiko/Config/Parser.y
 $ cabal-dev configure
