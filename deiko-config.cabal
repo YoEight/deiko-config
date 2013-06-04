@@ -27,4 +27,3 @@ library
                          ,array ==0.4.*
                          ,containers ==0.5.*
                          ,mtl ==2.1.*
-                         ,either >=3.4

@@ -16,7 +16,6 @@ import           Control.Monad.Error        (MonadError (..))
 import           Control.Monad.Reader       (MonadReader, asks, runReaderT)
 import           Control.Monad.State        (execStateT, get, put)
 import           Control.Monad.Trans        (MonadIO (..), lift)
-import           Control.Monad.Trans.Either (runEitherT)
 
 import           Data.Char                  (isDigit)
 import           Data.Foldable              (traverse_)
