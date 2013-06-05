@@ -2,6 +2,7 @@ module Text.Deiko.Config (module Text.Deiko.Config.Core
                          ,ConfigValue(..)
                          ,CanReport(..)
                          ,Config
+                         ,ConfigError(..)
                          ,loadConfig) where
 
 import Control.Monad.Trans        (MonadIO (..))
