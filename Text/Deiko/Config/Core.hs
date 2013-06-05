@@ -1,6 +1,5 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
-module Text.Deiko.Config.Core (loadConfig
-                              ,getValue
+module Text.Deiko.Config.Core (getValue
                               ,getValues
                               ,HasConfig(..)
                               ,CanReport(..)
@@ -10,7 +9,7 @@ import           Control.Applicative        (WrappedMonad (..))
 import           Control.Monad              (liftM)
 import           Control.Monad.Reader       (MonadReader, asks, runReaderT)
 import           Control.Monad.State        (execStateT, get, put)
-import           Control.Monad.Trans        (MonadIO (..), lift)
+import           Control.Monad.Trans        (lift)
 
 import           Data.Foldable              (traverse_)
 import           Data.List                  (unionBy)
@@ -19,11 +18,6 @@ import           Data.Traversable           (traverse)
 
 import           Text.Deiko.Config.Semantic
 import           Text.Deiko.Config.Types
-
-loadConfig :: (CanReport m, MonadIO m) => String -> m Config
-loadConfig path =
-  do file <- liftIO $ readFile path
-     either reportError return (compile file)
 
 getValue :: (ConfigValue v, CanReport m, HasConfig r, MonadReader r m)
          => String

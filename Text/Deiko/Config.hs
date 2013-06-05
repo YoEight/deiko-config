@@ -1,5 +1,16 @@
 module Text.Deiko.Config (module Text.Deiko.Config.Core
-                         ,module Text.Deiko.Config.Types) where
+                         ,HasConfig(..)
+                         ,ConfigValue(..)
+                         ,CanReport(..)
+                         ,loadConfig) where
+
+import Control.Monad.Trans        (MonadIO (..))
 
 import Text.Deiko.Config.Core
-import Text.Deiko.Config.Types ()
+import Text.Deiko.Config.Semantic
+import Text.Deiko.Config.Types 
+
+loadConfig :: (CanReport m, MonadIO m) => String -> m Config
+loadConfig path =
+  do file <- liftIO $ readFile path
+     either reportError return (compile file)
