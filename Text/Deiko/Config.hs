@@ -1,13 +1,14 @@
 module Text.Deiko.Config (module Text.Deiko.Config.Core
                          ,ConfigValue(..)
                          ,CanReport(..)
+                         ,Config
                          ,loadConfig) where
 
 import Control.Monad.Trans        (MonadIO (..))
 
 import Text.Deiko.Config.Core
 import Text.Deiko.Config.Semantic
-import Text.Deiko.Config.Types 
+import Text.Deiko.Config.Types
 
 loadConfig :: (CanReport m, MonadIO m) => String -> m Config
 loadConfig path =
