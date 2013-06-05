@@ -12,7 +12,6 @@ module Text.Deiko.Config.Core (loadConfig
 
 import           Control.Applicative        (WrappedMonad (..))
 import           Control.Monad              (liftM)
-import           Control.Monad.Error        (MonadError (..))
 import           Control.Monad.Reader       (MonadReader, asks, runReaderT)
 import           Control.Monad.State        (execStateT, get, put)
 import           Control.Monad.Trans        (MonadIO (..), lift)
