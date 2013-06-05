@@ -23,6 +23,7 @@ library
         Text.Deiko.Config.Lexer
         Text.Deiko.Config.Parser
         Text.Deiko.Config.Semantic
+        Text.Deiko.Config.Types
     build-depends:       base ==4.6.*
                          ,array ==0.4.*
                          ,containers ==0.5.*
