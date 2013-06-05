@@ -17,9 +17,6 @@ import Text.Deiko.Config.Semantic
 
 newtype ConfigError = ConfigError String deriving Show
 
-class HasConfig a where
-  getConfig :: a -> Config
-
 class Monad m => CanReport m where
   configError :: ConfigError -> m a
 
@@ -54,9 +51,6 @@ instance ConfigValue Bool where
       makeBool x       = reportError ("Error when parsing a Bool: value ["
                                      ++ x ++ "] is not a Bool")
   configValue key x    = reportError $ expErrMsg key "Bool" (showType x)
-
-instance HasConfig Config where
-  getConfig = id
 
 instance CanReport IO where
     configError (ConfigError msg) = ioError $ userError msg

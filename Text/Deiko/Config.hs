@@ -1,5 +1,4 @@
 module Text.Deiko.Config (module Text.Deiko.Config.Core
-                         ,HasConfig(..)
                          ,ConfigValue(..)
                          ,CanReport(..)
                          ,loadConfig) where

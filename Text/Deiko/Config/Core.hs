@@ -1,13 +1,8 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
 module Text.Deiko.Config.Core (getValue
-                              ,getValues
-                              ,HasConfig(..)
-                              ,CanReport(..)
-                              ,ConfigError(..)) where
+                              ,getValues) where
 
 import           Control.Applicative        (WrappedMonad (..))
 import           Control.Monad              (liftM)
-import           Control.Monad.Reader       (MonadReader, asks, runReaderT)
 import           Control.Monad.State        (execStateT, get, put)
 import           Control.Monad.Trans        (lift)
 
@@ -19,16 +14,12 @@ import           Data.Traversable           (traverse)
 import           Text.Deiko.Config.Semantic
 import           Text.Deiko.Config.Types
 
-getValue :: (ConfigValue v, CanReport m, HasConfig r, MonadReader r m)
-         => String
-         -> m v
+getValue :: (ConfigValue v, CanReport m) => String -> Config -> m v
 getValue key =
   getEnv (transform configValue defaultSubstHandler key)
            (reportError . propErrMsg) key
 
-getValues :: (ConfigValue v, CanReport m, HasConfig r, MonadReader r m)
-          => String
-          -> m [v]
+getValues :: (ConfigValue v, CanReport m) => String -> Config -> m [v]
 getValues key =
   getEnv (transform go defaultSubstHandler key)
            (reportError . propErrMsg) key
@@ -37,14 +28,15 @@ getValues key =
       unwrapMonad (traverse (WrapMonad . configValue key) xs)
     go key x = reportError $ expErrMsg key "List" (showType x)
 
-getEnv :: (HasConfig r, CanReport m, MonadReader r m)
+getEnv :: CanReport m
        => (Register -> PropValue -> m v)
        -> (String -> m v)
        -> String
+       -> Config
        -> m v
-getEnv onSuccess onError key =
-  do register <- asks (configRegister . getConfig)
-     maybe (onError key) (onSuccess register) (M.lookup key register)
+getEnv onSuccess onError key config =
+  let register = configRegister config in
+  maybe (onError key) (onSuccess register) (M.lookup key register)
 
 transform :: CanReport m
           => (String -> PropValue -> m v)
