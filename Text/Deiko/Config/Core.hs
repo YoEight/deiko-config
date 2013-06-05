@@ -31,11 +31,11 @@ newtype ConfigError = ConfigError String deriving Show
 class HasConfig a where
   getConfig :: a -> Config
 
-class CanReport r where
-  configError :: ConfigError -> r
+class Monad m => CanReport m where
+  configError :: ConfigError -> m a
 
 class ConfigValue v where
-  configValue :: (CanReport e, MonadError e m) => String -> PropValue -> m v
+  configValue :: CanReport m => String -> PropValue -> m v
 
 instance ConfigValue PropValue where
   configValue _ = return
@@ -69,24 +69,19 @@ instance ConfigValue Bool where
 instance HasConfig Config where
   getConfig = id
 
-instance CanReport ConfigError where
-  configError = id
-
-loadConfig :: (CanReport e, MonadIO m, MonadError e m) => String -> m Config
+loadConfig :: (CanReport m, MonadIO m) => String -> m Config
 loadConfig path =
   do file <- liftIO $ readFile path
-     either (throwError . configError . ConfigError) return (compile file)
+     either reportError return (compile file)
 
-getValue :: (ConfigValue v, CanReport e, HasConfig r, MonadReader r m
-            , MonadError e m)
+getValue :: (ConfigValue v, CanReport m, HasConfig r, MonadReader r m)
          => String
          -> m v
 getValue key =
   getEnv (transform configValue defaultSubstHandler key)
            (reportError . propErrMsg) key
 
-getValues :: (ConfigValue v, CanReport e, HasConfig r, MonadReader r m
-             , MonadError e m)
+getValues :: (ConfigValue v, CanReport m, HasConfig r, MonadReader r m)
           => String
           -> m [v]
 getValues key =
@@ -97,7 +92,7 @@ getValues key =
       unwrapMonad (traverse (WrapMonad . configValue key) xs)
     go key x = reportError $ expErrMsg key "List" (showType x)
 
-getEnv :: (HasConfig r, CanReport e, MonadReader r m, MonadError e m)
+getEnv :: (HasConfig r, CanReport m, MonadReader r m)
        => (Register -> PropValue -> m v)
        -> (String -> m v)
        -> String
@@ -106,7 +101,7 @@ getEnv onSuccess onError key =
   do register <- asks (configRegister . getConfig)
      maybe (onError key) (onSuccess register) (M.lookup key register)
 
-transform :: (CanReport e, Monad m, MonadError e m)
+transform :: CanReport m
           => (String -> PropValue -> m v)
           -> (String -> String -> m v) -- on susbstitution
           -> String
@@ -147,11 +142,11 @@ transform f onsub key reg (PLIST xs) =
     constM = const return
 transform f _ key _ x = f key x
 
-defaultSubstHandler :: (CanReport e, MonadError e m) => String -> String -> m a
+defaultSubstHandler :: CanReport m => String -> String -> m a
 defaultSubstHandler key sub = reportError $ substErrMsg key sub
 
-reportError :: (CanReport e, MonadError e m) => String -> m a
-reportError = throwError . configError . ConfigError
+reportError :: CanReport m => String -> m a
+reportError = configError . ConfigError
 
 showType (PSTRING _) = "String"
 showType (PLIST _)   = "List"
