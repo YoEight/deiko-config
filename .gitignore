@@ -2,5 +2,4 @@
 cabal-dev/
 dist/
 data/
-*Lexer.hs
 *Parser.hs
