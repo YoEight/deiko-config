@@ -1,14 +1,16 @@
 module Text.Deiko.Config.Lexer where
 
+import Control.Monad.Trans
 import Data.Conduit
+import Data.Foldable (Foldable, traverse_)
 import Data.Char
 
 lexer :: Monad m => Conduit Char m Token
-lexer = recv (step 0 0) nop 
+lexer = recv (step 1 1) nop 
 
 make :: Monad m 
-     => Integer
-     -> Integer
+     => Int
+     -> Int
      -> Sym
      -> Conduit a m Token
 make l c s = yield (Elm l c s)
@@ -22,8 +24,8 @@ recv k eof = do
   maybe (eof >> yield EOF) k input
 
 step :: Monad m
-     => Integer -- Line
-     -> Integer -- column
+     => Int -- Line
+     -> Int -- column
      -> Char
      -> Conduit Char m Token
 step l c ' '  = make l c SPACE    >> stripSpaces step nop l (c+1)
@@ -44,8 +46,8 @@ step l c x
   | otherwise  = makeStr [] l c x
 
 stringStep :: Monad m
-           => Integer
-           -> Integer
+           => Int
+           -> Int
            -> Conduit Char m Token
 stringStep l c = recv step1 (untermStr l c)
   where
@@ -56,8 +58,8 @@ stringStep l c = recv step1 (untermStr l c)
     step2 x   = (make l (c+2) $ STRING "") >> step l (c+2) x
 
 substStep :: Monad m
-          => Integer
-          -> Integer
+          => Int
+          -> Int
           -> Conduit Char m Token
 substStep l c = recv step1 (make l (c+1) $ STRING "$")
   where
@@ -69,28 +71,29 @@ nop = return ()
 
 makeId :: Monad m 
        => String 
-       -> Integer 
-       -> Integer 
+       -> Int 
+       -> Int 
        -> Char 
        -> Conduit Char m Token
 makeId acc l c x
-  | validIdChar x         = recv (makeId (x:acc) l (c+1)) produce
-  | x == ' ' || x == '\n' = produce >> step l c x
+  | validIdChar x         = recv (makeId (x:acc) l c) (produce True)
+  | x == ' ' || x == '\n' = produce False >> step l (c + (length acc)) x
   | otherwise             = makeStr acc l c x
   where
-    produce = yield (Elm l c (ID (reverse acc)))
+    produce eof = let xs   = if eof then x:acc else acc in 
+                  yield (Elm l c (ID (reverse xs)))
 
 makeStr :: Monad m
          => String
-         -> Integer
-         -> Integer
+         -> Int
+         -> Int
          -> Char
          -> Conduit Char m Token
 makeStr acc l c x
-  | x == '\n'             = err
-  | x == '$'              = recv decide (produce x)
-  | x == '"'              = produce x >> recv (step l (c+1)) nop
-  | otherwise             = recv (makeStr (x:acc) l (c+1)) (produce x)
+  | x == '\n' = err
+  | x == '$'  = recv decide (produce x)
+  | x == '"'  = produce x >> recv (step l (c+(length (x:acc)))) nop
+  | otherwise = recv (makeStr (x:acc) l c) (produce x)
   where 
     err = make l c $ ERROR "Newline is not allowed in a single line String"
 
@@ -99,13 +102,13 @@ makeStr acc l c x
     produce2 x y = yield (Elm l c (STRING (reverse (y:x:acc))))
                 
     decide y 
-      | y == '{'  = recv (makeSubst [] l (c+2)) (produce2 x y)
-      | otherwise = makeStr (x:acc) l (c+1) y 
+      | y == '{'  = recv (makeSubst [] l c) (produce2 x y)
+      | otherwise = makeStr (x:acc) l c y 
 
 makeRawStr :: Monad m
            => String
-           -> Integer
-           -> Integer
+           -> Int
+           -> Int
            -> Char
            -> Conduit Char m Token
 makeRawStr acc l c x
@@ -128,37 +131,37 @@ makeRawStr acc l c x
 
 makeSubst :: Monad m 
           => String
-          -> Integer
-          -> Integer
+          -> Int
+          -> Int
           -> Char
           -> Conduit Char m Token
 makeSubst acc l c x =
   case acc of
     [] | isLetter x || 
-         x == '?'      -> recv (makeSubst [x] l (c+1)) (string [x])
-       | otherwise     -> recv (makeStr (x:"{$") l (c+1)) (string [x])
+         x == '?'      -> recv (makeSubst [x] l c) (string [x])
+       | otherwise     -> recv (makeStr (x:"{$") l c) (string [x])
 
-    ['?'] | isLetter x -> recv (makeSubst (x:acc) l (c+1)) (string (x:acc))
-          | otherwise  -> recv (makeStr (x:"?{$") l (c+1)) (string (x:acc))
+    ['?'] | isLetter x -> recv (makeSubst (x:acc) l c) (string (x:acc))
+          | otherwise  -> recv (makeStr (x:"?{$") l c) (string (x:acc))
 
     _  | validIdChar x || 
-         x == '.'         -> recv (makeSubst (x:acc) l (c+1)) (string (x:acc))
-       | x == '}'         -> make l c (SUBST $ reverse (x:acc)) >> 
-                             recv (step l (c+1)) nop
+         x == '.'         -> recv (makeSubst (x:acc) l c) (string (x:acc))
+       | x == '}'         -> make l (c-2) (SUBST $ reverse acc) >> 
+                             recv (step l (c+(length acc)+1)) nop
        | otherwise        -> string (x:acc)
   where
     string xs = make l c (STRING ("${" ++ (reverse xs)))
 
-stripComment :: Monad m => Integer -> Conduit Char m Token
+stripComment :: Monad m => Int -> Conduit Char m Token
 stripComment l = recv go nop
   where
     go '\n' = stripNewlines step nop (l+1)
     go _    = stripComment l
 
 stripNewlines :: Monad m 
-              => (Integer -> Integer -> Char -> Conduit Char m Token) -- continuation
+              => (Int -> Int -> Char -> Conduit Char m Token) -- continuation
               -> Conduit Char m Token                                 -- fallback
-              -> Integer 
+              -> Int 
               -> Conduit Char m Token
 stripNewlines k f l = recv go f
   where
@@ -166,10 +169,10 @@ stripNewlines k f l = recv go f
     go x    = k l 0 x
 
 stripSpaces :: Monad m 
-            => (Integer -> Integer -> Char -> Conduit Char m Token) -- continuation
+            => (Int -> Int -> Char -> Conduit Char m Token) -- continuation
             -> Conduit Char m Token                                 -- fallback
-            -> Integer 
-            -> Integer 
+            -> Int 
+            -> Int 
             -> Conduit Char m Token
 stripSpaces k f l c = recv go f
   where
@@ -179,11 +182,11 @@ stripSpaces k f l c = recv go f
 validIdChar :: Char -> Bool
 validIdChar x = isLetter x || isDigit x || x == '-' || x == '_'
 
-untermStr :: Monad m => Integer -> Integer -> Conduit Char m Token
+untermStr :: Monad m => Int -> Int -> Conduit Char m Token
 untermStr l c = make l c $ ERROR "Unterminated String literal"
 
-data Token = Elm Integer Integer Sym
-           | EOF
+data Token = Elm Int Int Sym
+           | EOF deriving Show
 
 data Sym = ID String
          | STRING String
@@ -197,4 +200,10 @@ data Sym = ID String
          | SPACE
          | NEWLINE
          | COMMA
-         | DOT
+         | DOT deriving Show
+
+printer :: Show a => Sink a IO ()
+printer = awaitForever (liftIO . print)
+
+source :: (Monad m, Foldable f) => f a -> Source m a
+source = traverse_ yield
