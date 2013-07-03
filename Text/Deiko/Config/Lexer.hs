@@ -5,6 +5,10 @@ import Data.Conduit
 import Data.Foldable (Foldable, traverse_)
 import Data.Char
 
+data SubstState = None
+                | Simple
+                | Raw
+
 lexer :: Monad m => Conduit Char m Token
 lexer = recv (step 1 1) nop 
 
@@ -63,7 +67,7 @@ substStep :: Monad m
           -> Conduit Char m Token
 substStep l c = recv step1 (make l (c+1) $ STRING "$")
   where
-    step1 '{' = recv (makeSubst [] l (c+2)) (make l (c+2) $ STRING "${")
+    step1 '{' = recv (makeSubst None [] l (c+2)) (make l (c+2) $ STRING "${")
     step1  x  = makeStr "$" l (c+1) x
 
 nop :: Monad m => Conduit i m o
@@ -80,8 +84,9 @@ makeId acc l c x
   | x == ' ' || x == '\n' = produce False >> step l (c + (length acc)) x
   | otherwise             = makeStr acc l c x
   where
-    produce eof = let xs   = if eof then x:acc else acc in 
-                  yield (Elm l c (ID (reverse xs)))
+    produce eof = 
+      let xs = if eof then x:acc else acc in 
+      yield (Elm l c (ID (reverse xs)))
 
 makeStr :: Monad m
          => String
@@ -92,17 +97,23 @@ makeStr :: Monad m
 makeStr acc l c x
   | x == '\n' = err
   | x == '$'  = recv decide (produce x)
-  | x == '"'  = produce x >> recv (step l (c+(length (x:acc)))) nop
+  | x == '"'  = produce0 >> recv (step l (c+(length (x:acc)))) nop
   | otherwise = recv (makeStr (x:acc) l c) (produce x)
   where 
     err = make l c $ ERROR "Newline is not allowed in a single line String"
+          
+    produce0 = make l c $ STRING (reverse acc)
 
-    produce x = yield (Elm l c (STRING (reverse (x:acc))))
+    produce x = make l c $ STRING (reverse (x:acc))
 
-    produce2 x y = yield (Elm l c (STRING (reverse (y:x:acc))))
+    produce2 x y = make l c $ STRING (reverse (y:x:acc))
                 
     decide y 
-      | y == '{'  = recv (makeSubst [] l c) (produce2 x y)
+      | y == '{'  =
+        let c1 = c + (length acc) in
+        case acc of
+          [] -> recv (makeSubst Simple [] l c) (produce2 x y)
+          _  -> produce0 >> recv (makeSubst Simple [] l c1) (untermStr l c1)
       | otherwise = makeStr (x:acc) l c y 
 
 makeRawStr :: Monad m
@@ -130,26 +141,33 @@ makeRawStr acc l c x
     rubbish l c x   = makeRawStr (' ':acc) l c x
 
 makeSubst :: Monad m 
-          => String
+          => SubstState
+          -> String
           -> Int
           -> Int
           -> Char
           -> Conduit Char m Token
-makeSubst acc l c x =
+makeSubst state acc l c x =
   case acc of
     [] | isLetter x || 
-         x == '?'      -> recv (makeSubst [x] l c) (string [x])
+         x == '?'      -> recv (makeSubst state [x] l c) (string [x])
        | otherwise     -> recv (makeStr (x:"{$") l c) (string [x])
 
-    ['?'] | isLetter x -> recv (makeSubst (x:acc) l c) (string (x:acc))
+    ['?'] | isLetter x -> recv (makeSubst state (x:acc) l c) (string (x:acc))
           | otherwise  -> recv (makeStr (x:"?{$") l c) (string (x:acc))
 
     _  | validIdChar x || 
-         x == '.'         -> recv (makeSubst (x:acc) l c) (string (x:acc))
-       | x == '}'         -> make l (c-2) (SUBST $ reverse acc) >> 
-                             recv (step l (c+(length acc)+1)) nop
-       | otherwise        -> string (x:acc)
+         x == '.'        -> recv (makeSubst state (x:acc) l c) (string (x:acc))
+       | x == '}'        -> make l (c-2) (SUBST $ reverse acc) >> decision
+       | otherwise       -> string (x:acc)
   where
+    decision = 
+      let c1 = c+(length acc)+1 in
+      case state of
+        None   -> recv (step l c1) nop
+        Simple -> recv (makeStr [] l c1) (untermStr l c1)
+        Raw    -> recv (makeRawStr [] l c1) (untermStr l c1)
+
     string xs = make l c (STRING ("${" ++ (reverse xs)))
 
 stripComment :: Monad m => Int -> Conduit Char m Token
@@ -160,7 +178,7 @@ stripComment l = recv go nop
 
 stripNewlines :: Monad m 
               => (Int -> Int -> Char -> Conduit Char m Token) -- continuation
-              -> Conduit Char m Token                                 -- fallback
+              -> Conduit Char m Token                         -- fallback
               -> Int 
               -> Conduit Char m Token
 stripNewlines k f l = recv go f
