@@ -100,9 +100,9 @@ makeStr :: Monad m
          -> Conduit Char m Token
 makeStr state acc l c x
   | x == '\n' = case state of 
-                  None   -> produce0 >> recv (step l (c+(length (x:acc)))) nop
+                  None   -> produce0 >> recv (step (l+1) (c+(length (x:acc)))) nop
                   Simple -> err
-                  Raw    -> stripNewlines rubbish (untermStr l c) l
+                  Raw    -> stripNewlines rubbish (untermStr (l+1) c) (l+1)
   | x == '$'  = case state of
                   None -> recv decide (produce x)
                   _    -> recv decide (untermStr l c) 
