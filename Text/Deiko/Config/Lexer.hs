@@ -2,6 +2,8 @@ module Text.Deiko.Config.Lexer where
 
 import Control.Monad.Trans
 import Data.Conduit
+import Data.Conduit.Binary
+import Data.ByteString.Char8 (unpack)
 import Data.Foldable (Foldable, traverse_)
 import Data.Char
 
@@ -58,7 +60,7 @@ stringStep l c = recv step1 (untermStr l c)
     step1 '"' = recv step2 (make l (c+2) $ STRING "")
     step1 x   = makeStr Simple [] l (c+1) x
                 
-    step2 '"' = recv (makeRawStr [] l (c+3)) (untermStr l (c+3))
+    step2 '"' = recv (makeStr Raw [] l (c+3)) (untermStr l (c+3))
     step2 x   = (make l (c+2) $ STRING "") >> step l (c+2) x
 
 substStep :: Monad m
@@ -80,9 +82,10 @@ makeId :: Monad m
        -> Char 
        -> Conduit Char m Token
 makeId acc l c x
-  | validIdChar x         = recv (makeId (x:acc) l c) (produce True)
-  | x == ' ' || x == '\n' = produce False >> step l (c + (length acc)) x
-  | otherwise             = makeStr None acc l c x
+  | validIdChar x           = recv (makeId (x:acc) l c) (produce True)
+  | x == ' ' || x == '\n' ||
+    x == '.' || x == ':'    = produce False >> step l (c + (length acc)) x
+  | otherwise               = makeStr None acc l c x
   where
     produce eof = 
       let xs = if eof then x:acc else acc in 
@@ -99,16 +102,24 @@ makeStr state acc l c x
   | x == '\n' = case state of 
                   None   -> produce0 >> recv (step l (c+(length (x:acc)))) nop
                   Simple -> err
+                  Raw    -> stripNewlines rubbish (untermStr l c) l
   | x == '$'  = case state of
-                  None   -> recv decide (produce x)
-                  Simple -> recv decide (untermStr l c)
+                  None -> recv decide (produce x)
+                  _    -> recv decide (untermStr l c) 
   | x == '"'  = case state of
                   None   -> recv (makeStr state ('"':acc) l c) (produce x)
                   Simple -> produce0 >> recv (step l (c+(length (x:acc)))) nop
+                  Raw    -> recv step1 (untermStr l c)
   | otherwise = case state of
-                  None   -> recv (makeStr state (x:acc) l c) (produce x)
-                  Simple -> recv (makeStr state (x:acc) l c) (untermStr l c)
+                  None -> recv (makeStr state (x:acc) l c) (produce x)
+                  _    -> recv (makeStr state (x:acc) l c) (untermStr l c)
   where 
+    step1 '"' = recv step2 (untermStr l c)
+    step1 x   = makeStr state ('"':acc) l c x
+
+    step2 '"' = produce0 >> recv (step l (c+(length acc)+3)) nop
+    step2 x   = makeStr state ('"':'"':acc) l c x
+    
     err = make l c $ ERROR "Newline is not allowed in a single line String"
           
     produce0 = make l c $ STRING (reverse acc)
@@ -116,6 +127,9 @@ makeStr state acc l c x
     produce x = make l c $ STRING (reverse (x:acc))
 
     produce2 x y = make l c $ STRING (reverse (y:x:acc))
+
+    rubbish l c ' ' = stripSpaces (makeStr state (' ':acc)) (untermStr l c) l c
+    rubbish l c x   = makeStr state (' ':acc) l c x
                 
     decide y 
       | y == '{'  =
@@ -124,30 +138,6 @@ makeStr state acc l c x
           [] -> recv (makeSubst state [] l c) (produce2 x y)
           _  -> produce0 >> recv (makeSubst state [] l c1) (untermStr l c1)
       | otherwise = makeStr state (x:acc) l c y 
-
-makeRawStr :: Monad m
-           => String
-           -> Int
-           -> Int
-           -> Char
-           -> Conduit Char m Token
-makeRawStr acc l c x
-  | x == '"'  = recv step1 err
-  | x == '\n' = stripNewlines rubbish err l
-  | otherwise = recv (makeRawStr (x:acc) l (c+1)) err
-  where
-    step1 '"' = recv step2 err
-    step1 x   = makeRawStr ('"':acc) l (c+1) x
-
-    step2 '"' = produce >> recv (step l (c+3)) nop
-    step2 x   = makeRawStr ('"':'"':acc) l (c+2) x
-
-    err     = untermStr l c
-    go      = produce >> recv (step l (c+3)) nop
-    produce = make l c $ STRING (reverse acc)
-
-    rubbish l c ' ' = stripSpaces (makeRawStr (' ':acc)) produce l (c+1)
-    rubbish l c x   = makeRawStr (' ':acc) l c x
 
 makeSubst :: Monad m 
           => StringState
@@ -173,9 +163,8 @@ makeSubst state acc l c x =
     decision = 
       let c1 = c+(length acc)+1 in
       case state of
-        None   -> recv (step l c1) nop
-        Simple -> recv (makeStr Simple [] l c1) (untermStr l c1)
-        Raw    -> recv (makeRawStr [] l c1) (untermStr l c1)
+        None -> recv (step l c1) nop
+        _    -> recv (makeStr state [] l c1) (untermStr l c1)
 
     string xs = make l c (STRING ("${" ++ (reverse xs)))
 
@@ -197,13 +186,13 @@ stripNewlines k f l = recv go f
 
 stripSpaces :: Monad m 
             => (Int -> Int -> Char -> Conduit Char m Token) -- continuation
-            -> Conduit Char m Token                                 -- fallback
+            -> Conduit Char m Token                         -- fallback
             -> Int 
             -> Int 
             -> Conduit Char m Token
 stripSpaces k f l c = recv go f
   where
-    go '_' = stripSpaces k f l (c+1)
+    go ' ' = stripSpaces k f l (c+1)
     go x   = k l c x
 
 validIdChar :: Char -> Bool
@@ -229,8 +218,14 @@ data Sym = ID String
          | COMMA
          | DOT deriving Show
 
-printer :: Show a => Sink a IO ()
+printer :: (Show a, MonadIO m) => Sink a m ()
 printer = awaitForever (liftIO . print)
 
 source :: (Monad m, Foldable f) => f a -> Source m a
 source = traverse_ yield
+
+fromFile :: String -> Source (ResourceT IO) Char
+fromFile path = sourceFile path $= go
+  where
+    go = awaitForever $ \bytes ->
+         traverse_ yield (unpack bytes)
