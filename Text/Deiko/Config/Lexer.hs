@@ -35,7 +35,7 @@ step :: Monad m
      -> Char
      -> Conduit Char m Token
 step l c ' '  = make l c SPACE    >> stripSpaces step nop l (c+1)
-step l c '\n' = make l c NEWLINE  >> stripNewlines step nop l
+step l c '\n' = make l c NEWLINE  >> stripNewlines step nop (l+1)
 step l c '.'  = make l c DOT      >> recv (step l (c+1)) nop
 step l c '='  = make l c EQUAL    >> recv (step l (c+1)) nop
 step l c ':'  = make l c EQUAL    >> recv (step l (c+1)) nop
