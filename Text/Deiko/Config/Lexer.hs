@@ -110,6 +110,10 @@ makeStr state acc l c x
                   None   -> recv (makeStr state ('"':acc) l c) (produce x)
                   Simple -> produce0 >> recv (step l (c+(length (x:acc)))) nop
                   Raw    -> recv step1 (untermStr l c)
+  | x == ',' || 
+    x == ']' = case state of
+                 None -> produce0 >> step l (c+(length acc)) x
+                 _    -> recv (makeStr state (x:acc) l c) (untermStr l c)
   | otherwise = case state of
                   None -> recv (makeStr state (x:acc) l c) (produce x)
                   _    -> recv (makeStr state (x:acc) l c) (untermStr l c)
