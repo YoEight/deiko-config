@@ -5,7 +5,7 @@ import Data.Conduit
 import Data.Foldable (Foldable, traverse_)
 import Data.Char
 
-data SubstState = None
+data StringState = None
                 | Simple
                 | Raw
 
@@ -47,7 +47,7 @@ step l c '"'  = stringStep l c
 step l c '$'  = substStep l c
 step l c x 
   | isLetter x = makeId [] l c x
-  | otherwise  = makeStr [] l c x
+  | otherwise  = makeStr None [] l c x
 
 stringStep :: Monad m
            => Int
@@ -56,7 +56,7 @@ stringStep :: Monad m
 stringStep l c = recv step1 (untermStr l c)
   where
     step1 '"' = recv step2 (make l (c+2) $ STRING "")
-    step1 x   = makeStr [] l (c+1) x
+    step1 x   = makeStr Simple [] l (c+1) x
                 
     step2 '"' = recv (makeRawStr [] l (c+3)) (untermStr l (c+3))
     step2 x   = (make l (c+2) $ STRING "") >> step l (c+2) x
@@ -68,7 +68,7 @@ substStep :: Monad m
 substStep l c = recv step1 (make l (c+1) $ STRING "$")
   where
     step1 '{' = recv (makeSubst None [] l (c+2)) (make l (c+2) $ STRING "${")
-    step1  x  = makeStr "$" l (c+1) x
+    step1  x  = makeStr None "$" l (c+1) x
 
 nop :: Monad m => Conduit i m o
 nop = return ()
@@ -82,23 +82,32 @@ makeId :: Monad m
 makeId acc l c x
   | validIdChar x         = recv (makeId (x:acc) l c) (produce True)
   | x == ' ' || x == '\n' = produce False >> step l (c + (length acc)) x
-  | otherwise             = makeStr acc l c x
+  | otherwise             = makeStr None acc l c x
   where
     produce eof = 
       let xs = if eof then x:acc else acc in 
       yield (Elm l c (ID (reverse xs)))
 
 makeStr :: Monad m
-         => String
+         => StringState
+         -> String
          -> Int
          -> Int
          -> Char
          -> Conduit Char m Token
-makeStr acc l c x
-  | x == '\n' = err
-  | x == '$'  = recv decide (produce x)
-  | x == '"'  = produce0 >> recv (step l (c+(length (x:acc)))) nop
-  | otherwise = recv (makeStr (x:acc) l c) (produce x)
+makeStr state acc l c x
+  | x == '\n' = case state of 
+                  None   -> produce0 >> recv (step l (c+(length (x:acc)))) nop
+                  Simple -> err
+  | x == '$'  = case state of
+                  None   -> recv decide (produce x)
+                  Simple -> recv decide (untermStr l c)
+  | x == '"'  = case state of
+                  None   -> recv (makeStr state ('"':acc) l c) (produce x)
+                  Simple -> produce0 >> recv (step l (c+(length (x:acc)))) nop
+  | otherwise = case state of
+                  None   -> recv (makeStr state (x:acc) l c) (produce x)
+                  Simple -> recv (makeStr state (x:acc) l c) (untermStr l c)
   where 
     err = make l c $ ERROR "Newline is not allowed in a single line String"
           
@@ -112,9 +121,9 @@ makeStr acc l c x
       | y == '{'  =
         let c1 = c + (length acc) in
         case acc of
-          [] -> recv (makeSubst Simple [] l c) (produce2 x y)
-          _  -> produce0 >> recv (makeSubst Simple [] l c1) (untermStr l c1)
-      | otherwise = makeStr (x:acc) l c y 
+          [] -> recv (makeSubst state [] l c) (produce2 x y)
+          _  -> produce0 >> recv (makeSubst state [] l c1) (untermStr l c1)
+      | otherwise = makeStr state (x:acc) l c y 
 
 makeRawStr :: Monad m
            => String
@@ -141,7 +150,7 @@ makeRawStr acc l c x
     rubbish l c x   = makeRawStr (' ':acc) l c x
 
 makeSubst :: Monad m 
-          => SubstState
+          => StringState
           -> String
           -> Int
           -> Int
@@ -151,10 +160,10 @@ makeSubst state acc l c x =
   case acc of
     [] | isLetter x || 
          x == '?'      -> recv (makeSubst state [x] l c) (string [x])
-       | otherwise     -> recv (makeStr (x:"{$") l c) (string [x])
+       | otherwise     -> recv (makeStr state (x:"{$") l c) (string [x])
 
     ['?'] | isLetter x -> recv (makeSubst state (x:acc) l c) (string (x:acc))
-          | otherwise  -> recv (makeStr (x:"?{$") l c) (string (x:acc))
+          | otherwise  -> recv (makeStr state (x:"?{$") l c) (string (x:acc))
 
     _  | validIdChar x || 
          x == '.'        -> recv (makeSubst state (x:acc) l c) (string (x:acc))
@@ -165,7 +174,7 @@ makeSubst state acc l c x =
       let c1 = c+(length acc)+1 in
       case state of
         None   -> recv (step l c1) nop
-        Simple -> recv (makeStr [] l c1) (untermStr l c1)
+        Simple -> recv (makeStr Simple [] l c1) (untermStr l c1)
         Raw    -> recv (makeRawStr [] l c1) (untermStr l c1)
 
     string xs = make l c (STRING ("${" ++ (reverse xs)))
