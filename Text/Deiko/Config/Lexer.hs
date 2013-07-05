@@ -1,15 +1,13 @@
-module Text.Deiko.Config.Lexer where
+module Text.Deiko.Config.Lexer (lexer, Token(..), Sym(..)) where
 
-import Control.Monad.Trans
-import Data.Conduit
-import Data.Conduit.Binary
+import Data.Conduit (Conduit, yield, await)
 import Data.ByteString.Char8 (unpack)
 import Data.Foldable (Foldable, traverse_)
-import Data.Char
+import Data.Char (isLetter, isDigit)
 
 data StringState = None
                 | Simple
-                | Raw
+                | Raw [String]
 
 lexer :: Monad m => Conduit Char m Token
 lexer = recv (step 1 1) nop 
@@ -57,11 +55,11 @@ stringStep :: Monad m
            -> Conduit Char m Token
 stringStep l c = recv step1 (untermStr l c)
   where
-    step1 '"' = recv step2 (make l (c+2) $ STRING "")
-    step1 x   = makeStr Simple [] l (c+1) x
+    step1 '"' = recv step2 (make l c $ STRING "")
+    step1 x   = makeStr Simple [] l c x
                 
-    step2 '"' = recv (makeStr Raw [] l (c+3)) (untermStr l (c+3))
-    step2 x   = (make l (c+2) $ STRING "") >> step l (c+2) x
+    step2 '"' = recv (makeStr (Raw []) [] l c) (untermStr l c)
+    step2 x   = (make l c $ STRING "") >> step l (c+2) x
 
 substStep :: Monad m
           => Int
@@ -100,16 +98,16 @@ makeStr :: Monad m
          -> Conduit Char m Token
 makeStr state acc l c x
   | x == '\n' = case state of 
-                  None   -> produce0 >> recv (step (l+1) (c+(length (x:acc)))) nop
+                  None   -> produce0 >> step l (c+(length acc)) x
                   Simple -> err
-                  Raw    -> stripNewlines rubbish (untermStr (l+1) c) (l+1)
+                  Raw xs -> recv (makeStr (Raw (acc:xs)) [] l c) (untermStr l c)
   | x == '$'  = case state of
                   None -> recv decide (produce x)
                   _    -> recv decide (untermStr l c) 
   | x == '"'  = case state of
                   None   -> recv (makeStr state ('"':acc) l c) (produce x)
-                  Simple -> produce0 >> recv (step l (c+(length (x:acc)))) nop
-                  Raw    -> recv step1 (untermStr l c)
+                  Simple -> produce0 >> recv (step l (c+(length acc)+2)) nop
+                  Raw _  -> recv step1 (untermStr l c)
   | x == ',' || 
     x == ']' = case state of
                  None -> produce0 >> step l (c+(length acc)) x
@@ -121,10 +119,27 @@ makeStr state acc l c x
     step1 '"' = recv step2 (untermStr l c)
     step1 x   = makeStr state ('"':acc) l c x
 
-    step2 '"' = produce0 >> recv (step l (c+(length acc)+3)) nop
+    step2 '"' = produceRaw >> recv (step finalLine finalCol) nop
     step2 x   = makeStr state ('"':'"':acc) l c x
     
     err = make l c $ ERROR "Newline is not allowed in a single line String"
+
+    finalLine = 
+      case state of
+        Raw xs -> l + length xs
+
+    finalCol =
+      case state of
+        Raw []     -> c + length acc + 3
+        Raw (xs:_) -> 1 + length acc + 3
+
+    produceRaw = 
+      case state of
+        Raw xs -> make l c (STRING str)
+          where
+            str = foldl go "" (reverse $ fmap (reverse . trim) xs)
+            go [] b = b
+            go xs b = xs ++ " " ++ b
           
     produce0 = make l c $ STRING (reverse acc)
 
@@ -132,9 +147,6 @@ makeStr state acc l c x
 
     produce2 x y = make l c $ STRING (reverse (y:x:acc))
 
-    rubbish l c ' ' = stripSpaces (makeStr state (' ':acc)) (untermStr l c) l c
-    rubbish l c x   = makeStr state (' ':acc) l c x
-                
     decide y 
       | y == '{'  =
         let c1 = c + (length acc) in
@@ -186,7 +198,7 @@ stripNewlines :: Monad m
 stripNewlines k f l = recv go f
   where
     go '\n' = stripNewlines k f (l+1)
-    go x    = k l 0 x
+    go x    = k l 1 x
 
 stripSpaces :: Monad m 
             => (Int -> Int -> Char -> Conduit Char m Token) -- continuation
@@ -199,6 +211,12 @@ stripSpaces k f l c = recv go f
     go ' ' = stripSpaces k f l (c+1)
     go x   = k l c x
 
+trim :: String -> String
+trim xs =
+  let (_, xs1) = span (== ' ') xs
+      (_, xs2) = span (== ' ') (reverse xs1) in
+  reverse xs2
+
 validIdChar :: Char -> Bool
 validIdChar x = isLetter x || isDigit x || x == '-' || x == '_'
 
@@ -206,7 +224,7 @@ untermStr :: Monad m => Int -> Int -> Conduit Char m Token
 untermStr l c = make l c $ ERROR "Unterminated String literal"
 
 data Token = Elm Int Int Sym
-           | EOF deriving Show
+           | EOF
 
 data Sym = ID String
          | STRING String
@@ -220,16 +238,4 @@ data Sym = ID String
          | SPACE
          | NEWLINE
          | COMMA
-         | DOT deriving Show
-
-printer :: (Show a, MonadIO m) => Sink a m ()
-printer = awaitForever (liftIO . print)
-
-source :: (Monad m, Foldable f) => f a -> Source m a
-source = traverse_ yield
-
-fromFile :: String -> Source (ResourceT IO) Char
-fromFile path = sourceFile path $= go
-  where
-    go = awaitForever $ \bytes ->
-         traverse_ yield (unpack bytes)
+         | DOT
