@@ -82,8 +82,10 @@ makeId :: Monad m
 makeId acc l c x
   | validIdChar x           = recv (makeId (x:acc) l c) (produce True)
   | x == ' ' || x == '\n' ||
-    x == '.' || x == ':'    = produce False >> step l (c + (length acc)) x
-  | otherwise               = makeStr None acc l c x
+    x == '.' || x == ':'  ||   
+    x == '=' || x == '{'  ||
+    x == '}'                 = produce False >> step l (c + (length acc)) x
+  | otherwise                = makeStr None acc l c x
   where
     produce eof = 
       let xs = if eof then x:acc else acc in 
@@ -224,7 +226,7 @@ untermStr :: Monad m => Int -> Int -> Conduit Char m Token
 untermStr l c = make l c $ ERROR "Unterminated String literal"
 
 data Token = Elm Int Int Sym
-           | EOF
+           | EOF deriving Show
 
 data Sym = ID String
          | STRING String
@@ -238,4 +240,4 @@ data Sym = ID String
          | SPACE
          | NEWLINE
          | COMMA
-         | DOT
+         | DOT deriving Show

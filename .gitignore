@@ -2,4 +2,3 @@
 cabal-dev/
 dist/
 data/
-*Parser.hs
