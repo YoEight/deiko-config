@@ -19,7 +19,7 @@ sourceString = traverse_ yield
 loadFile :: String -> IO (Either String (Mu AST))
 loadFile path = 
   let action = sourceFile path $= bytesToChar =$= lexer $$ parser in
-  runResourceT action  >>= \r ->
+  runResourceT action >>= \r ->
      fmap (const r) (printer r)
 
 printout :: (MonadIO m, Show a) => Sink a m ()
