@@ -18,6 +18,9 @@ data LexerState = LexerState { lexLine  :: Int
                              , lexBrace :: Int
                              , lexBrack :: Int }
 
+data Cell = CSTRING String
+          | CSUBST String
+
 type Lexer m a = StateT LexerState (ConduitM Char Token m) a
 
 lexer :: Monad m => Conduit Char m Token

@@ -1,6 +1,7 @@
 module Text.Deiko.Config.Parser where
 
 import Text.Deiko.Config.Lexer
+import Text.Deiko.Config.Util
 import Control.Monad
 import Data.Conduit
 import Data.Foldable (traverse_)
@@ -10,11 +11,6 @@ data LALR a = Shift a
             | LookAhead (Token -> Bool) (Bool -> a)
             | Failure (Token -> String)
             | PrintStack -- only when debugging
-
-data Free f a = Return a
-              | Suspend (f (Free f a))
-
-newtype Mu f = Mu (f (Mu f))
 
 data AST a = ASTRING String
            | ALIST [a]
@@ -29,6 +25,16 @@ data Cell = CToken Int Int Sym
           | CAst (Mu AST)
           | CEOF
 
+instance Functor AST where
+  fmap f (ASTRING x)   = ASTRING x
+  fmap f (ALIST xs)    = ALIST (fmap f xs)
+  fmap f (ASUBST x)    = ASUBST x
+  fmap f (AMERGE x y)  = AMERGE (f x) (f y)
+  fmap f (AOBJECT xs)  = AOBJECT (fmap f xs)
+  fmap f (ASIMPLE x)   = ASIMPLE x
+  fmap f (ASELECT x y) = ASELECT (f x) (f y)
+  fmap f (APROP x y)   = APROP (f x) (f y)
+
 instance Functor LALR where
   fmap f (Shift a)       = Shift (f a)
   fmap f (Reduce p a)    = Reduce p (f a)
@@ -36,15 +42,12 @@ instance Functor LALR where
   fmap _ (Failure e)     = Failure e
   fmap _ PrintStack      = PrintStack
 
-instance Functor f => Monad (Free f) where
-  return = Return
-
-  Return a  >>= f = f a
-  Suspend m >>= f = Suspend $ fmap (f =<<) m
-
 type Stack = [Cell]
 
 type Production = Stack -> (Mu AST, Stack)
+
+type Transformation m = 
+  (Stack, Maybe Token) -> Sink Token m (Either String (Mu AST))
 
 identSimple :: Production
 identSimple ((CToken _ _ (ID x)):xs) = (Mu $ ASIMPLE x, xs)
@@ -334,27 +337,41 @@ toCell (Elm c l s) = CToken c l s
 toCell EOF         = CEOF
 
 makeParser :: Monad m => Free LALR () -> Sink Token m (Either String (Mu AST))
-makeParser instr = go [] Nothing instr
+makeParser instr = (cataFree pure impure instr) ([], Nothing)
   where
-    go stack ahead instr =
-      case instr of
-        Return _ -> let (CAst (Mu (ALIST xs))) = head stack in 
-                    return (Right $ Mu $ ALIST (reverse xs))
-        Suspend i ->
-          case i of 
-            Shift n        -> 
-              maybe (recv (\t -> go (toCell t:stack) Nothing n)) 
-                      (\t -> go (toCell t:stack) Nothing n) ahead
-            Reduce p n     -> 
-              let (prod, stack1) = p stack 
-                  top            = CAst prod 
-                  stack2         = (top:stack1) in 
-              go stack2 ahead n
-            LookAhead pred k -> 
-              maybe (recv (\t -> go stack (Just t) (k $ pred t))) 
-                      (go stack ahead . k . pred) ahead
-            Failure k      -> let (Just token) = ahead in return $ Left (k token)
-            PrintStack     -> error $ printStack stack
+    pure _ ((CAst (Mu (ALIST xs))):_,_) = 
+      return (Right $ Mu $ ALIST (reverse xs))
+    
+    impure (Shift k)       = shifting k
+    impure (Reduce p k)    = reducing p k
+    impure (LookAhead p k) = looking p k
+    impure (Failure k)     = failing k
+    impure PrintStack      = reporting
+
+shifting :: Monad m => Transformation m -> Transformation m
+shifting k (stack, ahead) = maybe (recv go) go ahead
+  where
+    go t = k (toCell t:stack, Nothing)
+
+reducing :: Monad m => Production -> Transformation m -> Transformation m
+reducing p k (stack, ahead) = 
+  let (prod, stack1) = p stack
+      stack2         = (CAst prod:stack1) in 
+  k (stack2, ahead)
+
+looking :: Monad m 
+        => (Token -> Bool)
+        -> (Bool -> Transformation m)
+        -> Transformation m
+looking p k (stack, ahead) = maybe (recv go) go ahead
+  where 
+    go h = k (p h) (stack, Just h)
+
+failing :: Monad m => (Token -> String) -> Transformation m
+failing k (_, (Just h)) = return $ Left (k h) 
+
+reporting :: Monad m => Transformation m 
+reporting (stack, _) = error $ printStack stack
 
 printStack :: Stack -> String
 printStack [] = "*empty stack*"
@@ -362,33 +379,33 @@ printStack xs = foldr1 (\x y -> x ++ ", " ++ y) (fmap go xs)
   where
     go (CToken _ _ sym) = show sym
     go CEOF             = "$"
-    go (CAst (Mu ast))  = 
-      case ast of
-        APROP i v   -> "prop(" ++ go (CAst i) ++ ":" ++ go (CAst v) ++ ")"
-        ASIMPLE x   -> "id(" ++ x ++ ")"
-        ASELECT x y -> go (CAst x) ++ "." ++ go (CAst y) 
-        ASTRING x   -> "string(" ++ x ++ ")"
-        ALIST _     -> "list"
+    go (CAst mu)  = cata toString mu
+    
+    toString (APROP i v)   = "prop(" ++ i ++ ":" ++ v ++ ")"
+    toString (ASIMPLE x)   = "id(" ++ x ++ ")"
+    toString (ASELECT x y) = x ++ "." ++ y 
+    toString (ASTRING x)   = "string(" ++ x ++ ")"
+    toString (ALIST _)     =  "list"
 
 unexpected :: Token -> String
 unexpected (Elm l c sym) = 
   "Unexpected token " ++ show sym ++ " at (" ++ show l ++ ", " ++ show c ++ ")" 
 
 printer :: Either String (Mu AST) -> IO ()
-printer = print . either id go 
+printer = print . either id (cata go) 
   where
-    go (Mu (ASTRING x))           = "string(" ++ x ++ ")"
-    go (Mu (ASUBST x))            = "${" ++ x ++ "}"
-    go (Mu (AMERGE x y))          = "merge(" ++ go x ++ " =:= " ++ go y ++ ")"
-    go (Mu (APROP i v))           = go i ++ ": " ++ go v
-    go (Mu (AOBJECT xs))
-      | null xs                   = "object{}"
-      | otherwise                 = "object{" ++ foldr1 (\x y -> x ++ "," ++ y) (fmap go xs) ++ "}"
-    go (Mu (ALIST xs))
-      | null xs                   = "list([])"
-      | otherwise                 = "list([" ++ foldr1 (\x y -> x ++ "," ++ y) (fmap go xs) ++ "])"
-    go (Mu (ASIMPLE x))           = x
-    go (Mu (ASELECT ident value)) = go ident ++ "." ++ go value
+    go (ASTRING x)   = "string(" ++ x ++ ")"
+    go (ASUBST x)    = "${" ++ x ++ "}"
+    go (AMERGE x y)  = "merge(" ++ x ++ " =:= " ++ y ++ ")"
+    go (APROP i v)   = i ++ ": " ++ v
+    go (AOBJECT xs)
+      | null xs      = "object{}"
+      | otherwise    = "object{" ++ foldr1 (\x y -> x ++ "," ++ y) xs ++ "}"
+    go (ALIST xs)
+      | null xs      = "list([])"
+      | otherwise    = "list([" ++ foldr1 (\x y -> x ++ "," ++ y) xs ++ "])"
+    go (ASIMPLE x)   = x
+    go (ASELECT i v) = i ++ "." ++ v
 
 parser :: Monad m => Sink Token m (Either String (Mu AST))
 parser = makeParser parseProperties

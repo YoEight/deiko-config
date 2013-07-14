@@ -8,7 +8,8 @@ import Data.Conduit.Binary (sourceFile)
 import Data.ByteString.Char8 (ByteString, unpack)
 import Data.Foldable (traverse_)
 import Text.Deiko.Config.Lexer (lexer)
-import Text.Deiko.Config.Parser (Mu, AST, parser, printer) 
+import Text.Deiko.Config.Parser (AST, parser, printer)
+import Text.Deiko.Config.Util (Mu) 
 
 bytesToChar :: Monad m => Conduit ByteString m Char
 bytesToChar = awaitForever (traverse_ yield . unpack)
