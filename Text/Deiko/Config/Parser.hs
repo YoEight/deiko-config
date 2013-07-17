@@ -3,6 +3,8 @@ module Text.Deiko.Config.Parser where
 import Text.Deiko.Config.Lexer
 import Text.Deiko.Config.Util
 import Control.Monad
+import Control.Monad.Free (Free, wrap)
+import Control.Monad.Free.Church (F, fromF)
 import Data.Conduit
 import Data.Foldable (traverse_)
 
@@ -110,20 +112,20 @@ properties ((CToken _ NEWLINE):(CAst (Mu (ALIST p props))):xs) =
   (Mu $ ALIST p props, xs)
 properties (_:xs) = properties xs
 
-shift :: Free LALR ()
-shift = Suspend $ Shift (Return ())
+shift :: F LALR ()
+shift = wrap $ Shift (return ())
 
-reduce :: Production -> Free LALR ()
-reduce prod = Suspend $ Reduce prod (Return ())
+reduce :: Production -> F LALR ()
+reduce prod = wrap $ Reduce prod (return ())
 
-lookAhead :: (Token -> Bool) -> Free LALR Bool
-lookAhead p = Suspend $ LookAhead p Return
+lookAhead :: (Token -> Bool) -> F LALR Bool
+lookAhead p = wrap $ LookAhead p return
 
-showStack :: Free LALR a
-showStack = Suspend PrintStack
+showStack :: F LALR a
+showStack = wrap PrintStack
 
-failure :: (Token -> String) -> Free LALR a
-failure k = Suspend $ Failure k
+failure :: (Token -> String) -> F LALR a
+failure k = wrap $ Failure k
 
 isId :: Token -> Bool
 isId (Elm _ _ (ID _)) = True
@@ -180,27 +182,27 @@ isEOF _   = False
 anything :: Token -> Bool
 anything _ = True
 
-shiftSpace :: Free LALR ()
+shiftSpace :: F LALR ()
 shiftSpace =
   alt [(isSpace, shift)
       ,(anything, return ())]
 
-shiftNewline :: Free LALR ()
+shiftNewline :: F LALR ()
 shiftNewline =
   alt [(isNewline, shift)
       ,(anything, return ())]
 
-shiftSpaceOrNewline :: Free LALR ()
+shiftSpaceOrNewline :: F LALR ()
 shiftSpaceOrNewline = shiftSpace >> shiftNewline
 
-parseId :: Free LALR ()
+parseId :: F LALR ()
 parseId = do
   shift
   reduce identSimple
   alt [(isDot, parseSelect)
       ,(anything, return ())]
 
-parseSelect :: Free LALR ()
+parseSelect :: F LALR ()
 parseSelect = do
   shift
   alt [(isId, shift >> go)
@@ -212,10 +214,10 @@ parseSelect = do
         dot <- lookAhead isDot
         when dot parseSelect
 
-parseString :: Free LALR ()
+parseString :: F LALR ()
 parseString = shift >> reduce string
 
-parseProperty :: Free LALR ()
+parseProperty :: F LALR ()
 parseProperty = do
   shiftSpace
   alt [(isId, parseId >> go)
@@ -231,7 +233,7 @@ parseProperty = do
     
     step1 = shiftSpace >> parseValue
 
-parseProperties :: Free LALR ()
+parseProperties :: F LALR ()
 parseProperties = do
   parseProperty
   reduce propertiesHead
@@ -256,7 +258,7 @@ parseProperties = do
       reduce properties
       go
 
-parseObject :: Free LALR ()
+parseObject :: F LALR ()
 parseObject = do
   shift
   shiftSpaceOrNewline
@@ -268,7 +270,7 @@ parseObject = do
       alt [(isRBrace, shift >> reduce object)
           ,(anything, failure unexpected)]
 
-parseList :: Free LALR ()
+parseList :: F LALR ()
 parseList = do 
   shift
   shiftSpaceOrNewline
@@ -282,7 +284,7 @@ parseList = do
       alt [(isRBrack, shift >> reduce list)
           ,(anything, failure unexpected)]
 
-parseListHead :: Free LALR ()
+parseListHead :: F LALR ()
 parseListHead = do
   parseValue
   reduce listHead
@@ -297,7 +299,7 @@ parseListHead = do
 
       step = shift >> shiftSpaceOrNewline >> parseValue >> reduce listHead >> go
 
-parseMerge :: Free LALR ()
+parseMerge :: F LALR ()
 parseMerge = do
   shift
   alt [(isRBrack, return ())
@@ -312,7 +314,7 @@ parseMerge = do
       alt [(isSpace, parseMerge)
           ,(anything, return ())]
 
-parseValue :: Free LALR ()
+parseValue :: F LALR ()
 parseValue = do
   alt [(isString, parseString)
       ,(isId, parseString)
@@ -323,7 +325,7 @@ parseValue = do
   alt [(isSpace, parseMerge)
       ,(anything, return ())]
 
-alt :: [(Token -> Bool, Free LALR ())] -> Free LALR ()
+alt :: [(Token -> Bool, F LALR ())] -> F LALR ()
 alt []               = return ()
 alt ((f, action):xs) = lookAhead f >>= go
   where
@@ -407,4 +409,4 @@ printer = print . either id (cata go)
       | otherwise    = "list([" ++ foldr1 (\x y -> x ++ "," ++ y) xs ++ "])"
 
 parser :: Monad m => Sink Token m (Either String (Mu AST))
-parser = makeParser parseProperties
+parser = makeParser (fromF parseProperties)
