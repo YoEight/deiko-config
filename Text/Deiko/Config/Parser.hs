@@ -12,28 +12,26 @@ data LALR a = Shift a
             | Failure (Token -> String)
             | PrintStack -- only when debugging
 
-data AST a = ASTRING String
-           | ALIST [a]
-           | ASUBST String
+type Position = (Int, Int)
+
+data AST a = ASTRING Position String
+           | ALIST Position [a]
+           | ASUBST Position String
            | AMERGE a a
-           | AOBJECT [a]
-           | ASIMPLE String
-           | ASELECT a a
+           | AOBJECT Position [a]
            | APROP a a deriving Show
 
-data Cell = CToken Int Int Sym
+data Cell = CToken Position Sym
           | CAst (Mu AST)
           | CEOF
 
 instance Functor AST where
-  fmap f (ASTRING x)   = ASTRING x
-  fmap f (ALIST xs)    = ALIST (fmap f xs)
-  fmap f (ASUBST x)    = ASUBST x
-  fmap f (AMERGE x y)  = AMERGE (f x) (f y)
-  fmap f (AOBJECT xs)  = AOBJECT (fmap f xs)
-  fmap f (ASIMPLE x)   = ASIMPLE x
-  fmap f (ASELECT x y) = ASELECT (f x) (f y)
-  fmap f (APROP x y)   = APROP (f x) (f y)
+  fmap f (ASTRING p x)   = ASTRING p x
+  fmap f (ALIST p xs)    = ALIST p (fmap f xs)
+  fmap f (ASUBST p x)    = ASUBST p x
+  fmap f (AMERGE x y)    = AMERGE (f x) (f y)
+  fmap f (AOBJECT p xs)  = AOBJECT p (fmap f xs)
+  fmap f (APROP x y)     = APROP (f x) (f y)
 
 instance Functor LALR where
   fmap f (Shift a)       = Shift (f a)
@@ -50,62 +48,66 @@ type Transformation m =
   (Stack, Maybe Token) -> Sink Token m (Either String (Mu AST))
 
 identSimple :: Production
-identSimple ((CToken _ _ (ID x)):xs) = (Mu $ ASIMPLE x, xs)
+identSimple ((CToken p (ID x)):xs) = (Mu $ ASTRING p x, xs)
 
 identSelect :: Production
-identSelect ((CToken _ _ (ID x)):(CToken _ _ DOT):(CAst mu):xs) =
-  (Mu $ ASELECT mu (Mu $ ASIMPLE x), xs)
+identSelect ((CToken p (ID x)):(CToken _ DOT):(CAst mu):xs) =
+  (Mu $ AMERGE mu (Mu $ ASTRING p x), xs)
 
 string :: Production
-string ((CToken _ _ (STRING x)):xs) = (Mu $ ASTRING x, xs)
-string ((CToken _ _ (ID x)):xs)     = (Mu $ ASTRING x, xs) 
+string ((CToken p (STRING x)):xs) = (Mu $ ASTRING p x, xs)
+string ((CToken p (ID x)):xs)     = (Mu $ ASTRING p x, xs) 
 
-identValue :: Production
-identValue ((CAst (Mu (ASIMPLE x))):xs) = (Mu $ ASTRING x, xs)
+--identValue :: Production
+--identValue ((CAst (Mu (ASTRING p x))):xs) = (Mu $ ASTRING x, xs)
 
 list :: Production
-list ((CToken _ _ RBRACK):(CToken _ _ LBRACK):xs) = (Mu $ ALIST [], xs)
-list ((CToken _ _ RBRACK):(CAst (Mu (ALIST values))):xs) = 
-  (Mu $ ALIST $ reverse values, xs)
-list (x@(CToken _ _ RBRACK):_:xs) = list (x:xs)
+list ((CToken _ RBRACK):(CToken p LBRACK):xs) = (Mu $ ALIST p [], xs)
+list ((CToken _ RBRACK):(CAst (Mu (ALIST p values))):xs) = 
+  (Mu $ ALIST p $ reverse values, xs)
+list (x@(CToken _ RBRACK):_:xs) = list (x:xs)
 
 listHead :: Production
-listHead ((CAst value):(CToken _ _ LBRACK):xs) = (Mu $ ALIST [value], xs)
-listHead ((CAst value):(CToken _ _ COMMA):(CAst (Mu (ALIST values))):xs) =
-  (Mu $ ALIST (value:values), xs)
-listHead (x@(CAst value):y@(CToken _ _ COMMA):_:xs) = listHead (x:y:xs) 
+listHead ((CAst value):(CToken p LBRACK):xs) = (Mu $ ALIST p [value], xs)
+listHead ((CAst value):(CToken _ COMMA):(CAst (Mu (ALIST p values))):xs) =
+  (Mu $ ALIST p (value:values), xs)
+listHead (x@(CAst value):y@(CToken _ COMMA):_:xs) = listHead (x:y:xs) 
 listHead (x@(CAst value):_:xs) = listHead (x:xs)
 
 subst :: Production
-subst ((CToken _ _ (SUBST x)):xs) = (Mu $ ASUBST x, xs)
+subst ((CToken p (SUBST x)):xs) = (Mu $ ASUBST p x, xs)
 
 merge :: Production
-merge ((CAst y):(CToken _ _ SPACE):(CAst x):xs) = (Mu $ AMERGE x y, xs)
+merge ((CAst y):(CToken _ SPACE):(CAst x):xs) = (Mu $ AMERGE x y, xs)
 merge (_:xs) = merge xs
 
 object :: Production
-object ((CToken _ _ RBRACE):(CToken _ _ LBRACE):xs) = (Mu $ AOBJECT [], xs)
-object ((CToken _ _ RBRACE):(CAst (Mu (ALIST ps))):(CToken _ _ LBRACE):xs) =
-  (Mu $ AOBJECT $ reverse ps, xs)
-object (x@(CToken _ _ RBRACE):y@(CAst (Mu (ALIST _))):_:xs) = object (x:y:xs)
-object (x@(CToken _ _ RBRACE):_:xs) = object (x:xs)
+object ((CToken _ RBRACE):(CToken p LBRACE):xs) = (Mu $ AOBJECT p [], xs)
+object ((CToken _ RBRACE):(CAst (Mu (ALIST _ ps))):(CToken p LBRACE):xs) =
+  (Mu $ AOBJECT p $ reverse ps, xs)
+object (x@(CToken _ RBRACE):y@(CAst (Mu (ALIST _ _))):_:xs) = object (x:y:xs)
+object (x@(CToken _ RBRACE):_:xs) = object (x:xs)
 
 property :: Production
-property (x@(CAst value):y@(CAst ident):(CToken _ _ SPACE):xs) = 
+property (x@(CAst value):y@(CAst ident):(CToken _ SPACE):xs) = 
   property (x:y:xs)
 property ((CAst value):(CAst ident):xs) = (Mu $ APROP ident value, xs)
 property (x@(CAst value):_:xs) = property (x:xs)
 property (_:xs) = property xs -- trailling space, ex: id: value_[end]
 
 propertiesHead :: Production
-propertiesHead ((CAst prop):xs) = (Mu $ ALIST [prop], xs)
+propertiesHead ((CAst prop@(Mu (APROP i  _))):xs) = 
+  (Mu $ ALIST (cata go i) [prop], xs)
+    where
+      go (ASTRING p _) = p
+      go (AMERGE p _)  = p
 
 properties :: Production
-properties ((CAst prop):(CAst (Mu (ALIST props))):xs) = 
-  (Mu $ ALIST (prop:props), xs)
-properties (x@(CAst _):(CToken _ _ _):xs) = properties (x:xs)
-properties ((CToken _ _ NEWLINE):(CAst (Mu (ALIST props))):xs) =
-  (Mu $ ALIST props, xs)
+properties ((CAst prop):(CAst (Mu (ALIST p props))):xs) = 
+  (Mu $ ALIST p (prop:props), xs)
+properties (x@(CAst _):(CToken _ _):xs) = properties (x:xs)
+properties ((CToken _ NEWLINE):(CAst (Mu (ALIST p props))):xs) =
+  (Mu $ ALIST p props, xs)
 properties (_:xs) = properties xs
 
 shift :: Free LALR ()
@@ -333,14 +335,14 @@ recv :: Monad m => (Token -> Sink Token m a) -> Sink Token m a
 recv k = await >>= \t -> maybe (error "Exhausted source") k t
 
 toCell :: Token -> Cell
-toCell (Elm c l s) = CToken c l s
+toCell (Elm l c s) = CToken (l, c) s
 toCell EOF         = CEOF
 
 makeParser :: Monad m => Free LALR () -> Sink Token m (Either String (Mu AST))
 makeParser instr = (cataFree pure impure instr) ([], Nothing)
   where
-    pure _ ((CAst (Mu (ALIST xs))):_,_) = 
-      return (Right $ Mu $ ALIST (reverse xs))
+    pure _ ((CAst (Mu (ALIST p xs))):_,_) = 
+      return (Right $ Mu $ ALIST p (reverse xs))
     
     impure (Shift k)       = shifting k
     impure (Reduce p k)    = reducing p k
@@ -377,15 +379,14 @@ printStack :: Stack -> String
 printStack [] = "*empty stack*"
 printStack xs = foldr1 (\x y -> x ++ ", " ++ y) (fmap go xs)
   where
-    go (CToken _ _ sym) = show sym
+    go (CToken _ sym) = show sym
     go CEOF             = "$"
     go (CAst mu)  = cata toString mu
     
-    toString (APROP i v)   = "prop(" ++ i ++ ":" ++ v ++ ")"
-    toString (ASIMPLE x)   = "id(" ++ x ++ ")"
-    toString (ASELECT x y) = x ++ "." ++ y 
-    toString (ASTRING x)   = "string(" ++ x ++ ")"
-    toString (ALIST _)     =  "list"
+    toString (APROP i v)     = "prop(" ++ i ++ ":" ++ v ++ ")"
+    toString (AMERGE x y)    = x ++ "." ++ y 
+    toString (ASTRING _ x)   = "string(" ++ x ++ ")"
+    toString (ALIST _ _)     =  "list"
 
 unexpected :: Token -> String
 unexpected (Elm l c sym) = 
@@ -394,18 +395,16 @@ unexpected (Elm l c sym) =
 printer :: Either String (Mu AST) -> IO ()
 printer = print . either id (cata go) 
   where
-    go (ASTRING x)   = "string(" ++ x ++ ")"
-    go (ASUBST x)    = "${" ++ x ++ "}"
+    go (ASTRING _ x)   = x
+    go (ASUBST _ x)    = "${" ++ x ++ "}"
     go (AMERGE x y)  = "merge(" ++ x ++ " =:= " ++ y ++ ")"
     go (APROP i v)   = i ++ ": " ++ v
-    go (AOBJECT xs)
+    go (AOBJECT _ xs)
       | null xs      = "object{}"
       | otherwise    = "object{" ++ foldr1 (\x y -> x ++ "," ++ y) xs ++ "}"
-    go (ALIST xs)
+    go (ALIST _ xs)
       | null xs      = "list([])"
       | otherwise    = "list([" ++ foldr1 (\x y -> x ++ "," ++ y) xs ++ "])"
-    go (ASIMPLE x)   = x
-    go (ASELECT i v) = i ++ "." ++ v
 
 parser :: Monad m => Sink Token m (Either String (Mu AST))
 parser = makeParser parseProperties
