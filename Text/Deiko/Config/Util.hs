@@ -1,8 +1,14 @@
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 module Text.Deiko.Config.Util where
 
 import Control.Monad.Free (Free(..))
 
 newtype Mu f = Mu (f (Mu f))
+
+instance Show (f (Mu f)) => Show (Mu f) where
+  show = show . out
 
 out :: Mu f -> f (Mu f)
 out (Mu x) = x

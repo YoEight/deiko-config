@@ -8,24 +8,33 @@ module Text.Deiko.Config.Semantic (compile
                                   ,Object(..)) where
 
 import           Control.Monad            (when, (<=<))
+import Control.Comonad.Free
 import           Control.Monad.State
 import           Control.Monad.Trans      (lift)
 
+import Data.Conduit
 import           Data.Foldable            (traverse_)
 import qualified Data.Map                 as M
 import           Data.Traversable         (traverse)
 
-import           Text.Deiko.Config.Parser (Object (..), Prop (..),
-                                           PropValue (..), Root (..),
-                                           parseConfig)
+import Text.Deiko.Config.Util
+import           Text.Deiko.Config.Parser (AST (..))
 
-data Type = Defined String
-          | Joker
+data Type = TString
+          | TList
+          | TObjet
+          | TUnknown
 
 data Config = Config { configRoot     :: Root
                      , configRegister :: Register }
 
 type Register = M.Map String PropValue
+
+data TypecheckState = TypecheckState { tsCurrentPath :: String
+                                       tsMemoTypes   :: M.Map String Type }
+
+
+typecheck :: Monad m => Conduit (Either String (Mu AST))
 
 compile :: String -> Either String Config
 compile = semantic <=< parseConfig

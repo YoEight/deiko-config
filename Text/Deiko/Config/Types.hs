@@ -7,12 +7,11 @@ import Control.Monad.Cont         (ContT)
 import Control.Monad.Reader       (ReaderT)
 import Control.Monad.State        (StateT)
 import Control.Monad.Trans        (lift)
-
 import Data.Char                  (isDigit)
 import Data.String                (IsString (..))
-
+import Data.Foldable (Foldable, traverse_, foldMap)
+import Data.Traversable (Traversable, traverse)
 import System.IO.Error            (userError)
-
 import Text.Deiko.Config.Semantic
 
 newtype ConfigError = ConfigError String deriving Show

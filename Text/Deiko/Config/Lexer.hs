@@ -8,6 +8,7 @@ import Data.Conduit (Conduit, ConduitM, yield, await)
 import Data.ByteString.Char8 (unpack)
 import Data.Foldable (Foldable, traverse_)
 import Data.Char (isLetter, isDigit)
+import Text.Deiko.Config.Internal
 
 data StringState = None
                 | Simple
@@ -17,9 +18,6 @@ data LexerState = LexerState { lexLine  :: Int
                              , lexCol   :: Int 
                              , lexBrace :: Int
                              , lexBrack :: Int }
-
-data Cell = CSTRING String
-          | CSUBST String
 
 type Lexer m a = StateT LexerState (ConduitM Char Token m) a
 
@@ -268,20 +266,3 @@ unmatchedBrace = make $ ERROR "Unmatched brace"
 
 unmatchedBracket :: Monad m => Lexer m ()
 unmatchedBracket = make $ ERROR "Unmatched bracket"
-
-data Token = Elm Int Int Sym
-           | EOF deriving Show
-
-data Sym = ID String
-         | STRING String
-         | SUBST String
-         | ERROR String
-         | LBRACE
-         | RBRACE
-         | LBRACK
-         | RBRACK
-         | EQUAL
-         | SPACE
-         | NEWLINE
-         | COMMA
-         | DOT deriving Show
