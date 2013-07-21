@@ -16,6 +16,9 @@ import Text.Deiko.Config.Semantic
 
 newtype ConfigError = ConfigError String deriving Show
 
+class Monad m => Report m where
+  report :: String -> m a
+
 class Monad m => CanReport m where
   configError :: ConfigError -> m a
 

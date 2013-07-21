@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes, ImpredicativeTypes #-}
 module Text.Deiko.Config.Parser where
 
 import Control.Monad
@@ -15,10 +16,10 @@ data LALR a = Shift a
             | PrintStack -- only when debugging
 
 data Cell = CToken Position Sym
-          | CAst (Mu AST)
+          | CAst (Mu (AST Ident))
           | CIdent Ident
-          | CProp (Prop (Mu AST))
-          | CProps [Prop (Mu AST)]
+          | CProp (Prop (Mu (AST Ident)))
+          | CProps [Property Ident]
           | CEOF deriving Show
 
 instance Functor LALR where
@@ -33,7 +34,7 @@ type Stack = [Cell]
 type Production = Stack -> (Cell, Stack)
 
 type Transformation m = 
-  (Stack, Maybe Token) -> Sink Token m (Either String ([Prop (Mu AST)]))
+  (Stack, Maybe Token) -> Conduit Token m (Either String [Property Ident])
 
 identSimple :: Production
 identSimple ((CToken p (ID x)):xs) = (CIdent $ Ident p x, xs)
@@ -311,7 +312,7 @@ alt ((f, action):xs) = lookAhead f >>= go
       | isF       = action
       | otherwise = alt xs 
 
-recv :: Monad m => (Token -> Sink Token m a) -> Sink Token m a
+recv :: Monad m => (Token -> Conduit Token m a) -> Conduit Token m a
 recv k = await >>= \t -> maybe (error "Exhausted source") k t
 
 toCell :: Token -> Cell
@@ -320,11 +321,11 @@ toCell EOF         = CEOF
 
 makeParser :: Monad m 
            => Free LALR () 
-           -> Sink Token m (Either String [Prop (Mu AST)])
+           -> Conduit Token m (Either String [Property Ident])
 makeParser instr = (cataFree pure impure instr) ([], Nothing)
   where
-    pure _ (((CProps xs):_),_)  = return (Right $ reverse xs)
-    
+    pure _ (((CProps xs):_),_) = yield (Right $ reverse xs)
+
     impure (Shift k)       = shifting k
     impure (Reduce p k)    = reducing p k
     impure (LookAhead p k) = looking p k
@@ -336,27 +337,28 @@ shifting k (stack, ahead) = maybe (recv go) go ahead
   where
     go t = k (toCell t:stack, Nothing)
 
-reducing :: Monad m => Production -> Transformation m -> Transformation m
+reducing :: Production -> Transformation m -> Transformation m
 reducing p k (stack, ahead) = 
   let (prod, stack1) = p stack in k ((prod:stack1), ahead)
 
 looking :: Monad m 
-        => (Token -> Bool)
-        -> (Bool -> Transformation m)
+        => (Token -> Bool) 
+        -> (Bool -> Transformation m) 
         -> Transformation m
 looking p k (stack, ahead) = maybe (recv go) go ahead
   where 
     go h = k (p h) (stack, Just h)
 
 failing :: Monad m => (Token -> String) -> Transformation m
-failing k (_, (Just h)) = return $ Left (k h) 
+failing k (_, (Just h)) = yield $ Left (k h) 
 
-reporting :: Monad m => Transformation m 
+reporting :: Transformation m 
 reporting (stack, _) = error $ show stack
 
 unexpected :: Token -> String
 unexpected (Elm l c sym) = 
   "Unexpected token " ++ show sym ++ " at (" ++ show l ++ ", " ++ show c ++ ")" 
 
-parser :: Monad m => Sink Token m (Either String ([Prop (Mu AST)]))
+parser :: Monad m 
+       => Conduit Token m (Either String [Property Ident])
 parser = makeParser (fromF parseProperties)
