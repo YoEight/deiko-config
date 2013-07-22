@@ -18,7 +18,7 @@ data LALR a = Shift a
 data Cell = CToken Position Sym
           | CAst (Mu (AST Ident))
           | CIdent Ident
-          | CProp (Prop (Mu (AST Ident)))
+          | CProp (Property Ident)
           | CProps [Property Ident]
           | CEOF deriving Show
 

@@ -1,15 +1,12 @@
-module Text.Deiko.Config.Semantic where
+module Text.Deiko.Config.Semantic (Type(..), Register, typecheck) where
 
 import Prelude hiding (sequence)
-import Control.Applicative
-import Control.Monad (when, (<=<), void)
 import Control.Monad.State (StateT, State, modify, gets, get
                            , execState, evalState, evalStateT)
 import Control.Monad.Trans (lift)
-import Data.Conduit
+import Data.Conduit (Conduit, awaitForever, yield)
 import Data.Foldable (traverse_, foldMap)
-import qualified Data.Map                 as M
-import Data.Monoid (Monoid(..))
+import qualified Data.Map as M
 import Data.Traversable (traverse, sequence)
 import Text.Deiko.Config.Util
 import Text.Deiko.Config.Internal
@@ -34,10 +31,9 @@ typecheck = awaitForever (yield . (semantic =<<))
 semantic :: [Property Ident] -> Either String Register
 semantic props = 
   let props2 = fmap scoping props
-      action = 
-        do props3 <- traverse typing props2
-           checking
-           return (execState (traverse register props3) M.empty) in
+      action = traverse typing props2 >>= \props3 ->
+               fmap (const $ execState (traverse register props3) M.empty)
+                    checking in
   evalStateT action (TypeState M.empty [])      
 
 scoping :: Property Ident -> Property String
@@ -105,21 +101,21 @@ checking = do
     where
       go types (Constraint x y) =
         case (x, y) of
-          (TString _, TString _) -> mempty
-          (TObject _, TObject _) -> mempty
-          (TNil _, TList _ _)    -> mempty
-          (TList _ _, TNil _)    -> mempty
-          (TNil _, TNil _)       -> mempty
+          (TString _, TString _) -> ""
+          (TObject _, TObject _) -> ""
+          (TNil _, TList _ _)    -> ""
+          (TList _ _, TNil _)    -> ""
+          (TNil _, TNil _)       -> ""
           (TVar px x, TVar py y) ->
             let action = 
                   do xtype <- fmap (updatePos px) (M.lookup x types)
                      ytype <- fmap (updatePos py) (M.lookup y types)
                      return $ go types (Constraint xtype ytype) in
-            maybe mempty id action
+            maybe [] id action
           (TList p x, TList _ y) -> 
             let msg = go types (Constraint x y) 
                 ctx = "In context of List " ++ showPos p ++ " " in
-            if null msg then mempty else ctx ++ msg
+            if null msg then msg else ctx ++ msg
           (x, y) ->
             let xlabel = showType x
                 ylabel = showType y
@@ -144,7 +140,7 @@ register (Prop (key, typ) ast) =
            ytype <- y
            case (out xtype, out ytype) of
              (ALIST p vs, ALIST _ ws)     -> return $ Mu $ ALIST p (vs ++ ws)
-             (ASTRING p v, ASTRING _ w)   -> return $ Mu $ ASTRING p (v ++ w)
+             (ASTRING p v, ASTRING _ w)   -> return $ Mu $ ASTRING p (v ++  " " ++ w)
              (AOBJECT p vs, AOBJECT _ ws) -> return $ Mu $ AOBJECT p (vs ++ ws)
              _                            -> return $ Mu $ AMERGE xtype ytype
       registerAST (AOBJECT p props) =
@@ -158,6 +154,7 @@ showType :: Type -> String
 showType (TString _) = "String"
 showType (TObject _) = "Object"
 showType (TList _ t) = "List[" ++ showType t ++ "]"
+showType (TNil _)    = "List[A]"
 showType (TVar _ x)  = "typeof(" ++ x ++ ")"
 
 showPos :: Position -> String
