@@ -162,10 +162,13 @@ register (Prop (key, typ) ast) =
     modify (M.insertWith const key (typ, ast1))
     where
       registerAST (ASTRING p x)     = return $ string p x
-      registerAST (ASUBST p x)      = return $ subst p x
+      registerAST (ASUBST p x)      = registerSubst p x
       registerAST (ALIST p xs)      = fmap (list p) (sequence xs) 
       registerAST (AMERGE x y)      = registerMerge x y
       registerAST (AOBJECT p props) = registerObject p props
+
+registerSubst :: Position -> String -> Registering
+registerSubst p x = liftM (maybe (subst p x) (snd . id)) (gets (M.lookup x))
         
 registerMerge :: Registering -> Registering -> Registering
 registerMerge x y = go <$> x <*> y
