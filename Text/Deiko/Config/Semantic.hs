@@ -1,6 +1,8 @@
 module Text.Deiko.Config.Semantic (Type(..), Register, typecheck) where
 
 import Prelude hiding (sequence)
+import Control.Applicative (Applicative (..), (<$>))
+import Control.Monad (liftM)
 import Control.Monad.State (StateT, State, modify, gets, get
                            , execState, evalState, evalStateT)
 import Control.Monad.Trans (lift)
@@ -16,6 +18,10 @@ data Type = TString Position
           | TList Position Type
           | TNil Position
           | TObject Position deriving Show
+
+type Scoping = String -> Mu (AST String)
+type Typing m = StateT TypeState m (Type, Mu (AST (String, Type)))
+type Registering = State Register (Mu (AST (String, Type)))
 
 data Constraint = Constraint Type Type deriving Show
 
@@ -40,22 +46,33 @@ scoping :: Property Ident -> Property String
 scoping (Prop id ast) = Prop key ((para scopingAST ast) (key ++ "."))
   where
     key = makeId id
-          
-    scopingAST (ASTRING p x) _ = Mu $ ASTRING p x
-    scopingAST (ASUBST p x)  _ = Mu $ ASUBST p x
-    scopingAST (ALIST p xs)  _
-      | null xs   = Mu $ ALIST p []
-      | otherwise = 
-        let (Mu (ALIST p as), _) = head xs in
-        Mu $ ALIST p (fmap (\a -> para scopingAST a "") as)
-    scopingAST (AMERGE (_, fx) (_, fy)) scope =
-      Mu $ AMERGE (fx scope) (fy scope)
-    scopingAST (AOBJECT p xs) scope = 
-      let xs'              = fmap (fmap snd) xs
-          step (Prop id f) =
-            let key = scope ++ makeId id in
-            Prop key (f (key ++ ".")) in
-      Mu $ AOBJECT p (fmap step xs')
+
+scopingAST :: AST Ident (Mu (AST Ident), Scoping) -> Scoping
+scopingAST (ASTRING p x)            = const $ string p x
+scopingAST (ASUBST p x)             = const $ subst p x
+scopingAST (ALIST p xs)             = scopingList p xs
+scopingAST (AMERGE (_, fx) (_, fy)) = scopingMerge fx fy
+scopingAST (AOBJECT p xs)           = scopingObject p xs
+
+scopingList :: Position -> [(Mu (AST Ident), a)] -> Scoping
+scopingList p [] _              = nil p
+scopingList p ((Mu ast, _):_) _ = 
+  case ast of 
+    ALIST _ as -> list p (fmap (\a -> para scopingAST a "") as)
+
+scopingMerge :: Scoping -> Scoping -> Scoping
+scopingMerge fx fy scope = merge (fx scope) (fy scope)
+
+scopingObject :: Position 
+              -> [Prop Ident (Mu (AST Ident), Scoping)]
+              -> Scoping
+scopingObject p props scope = 
+  object p (fmap step props')
+    where
+      props' = fmap (fmap snd) props
+      step (Prop id f) =
+        let key = scope ++ makeId id in
+        property key (f (key ++ "."))
 
 typing :: (Monad m, Functor m) 
        => Property String 
@@ -65,32 +82,44 @@ typing (Prop key ast) = do
   modify (\s@TypeState{tsType=m} -> s{tsType=M.insertWith const key t m})
   return (Prop (key, t) ast1)
     where
-      typingAST (ASTRING p x) = return (TString p, Mu $ ASTRING p x)
-      typingAST (AMERGE x y)  = do
-        (tx, x1) <- x
-        (ty, y1) <- y
-        constrs  <- gets tsConstraints
-        modify (\s -> s{tsConstraints=(Constraint tx ty:constrs)})
-        return (tx, Mu $ AMERGE x1 y1)
-      typingAST (ASUBST p x)  = 
-        fmap (\m -> (maybe (TVar p x) 
-                             (updatePos p) 
-                             (M.lookup x m), Mu $ ASUBST p x))
-               (gets tsType)
-      typingAST (ALIST p xs)  = do
-        xstype <- sequence xs
-        case xstype of
-          []         -> return (TNil p, Mu $ ALIST p [])
-          ((t,_):ts) -> 
-            let step s@TypeState{tsConstraints=cs0} =
-                  s{tsConstraints=cs0 ++ fmap (Constraint t . fst) ts}  in
-            modify step >>
-            return (TList p t, Mu $ ALIST p (fmap snd xstype))
-      typingAST (AOBJECT p xs) =
-        let step (Prop key x) =
-              do (t, ast1) <- x
-                 return (Prop (key, t) ast1) in
-        fmap (\xs1 -> (TObject p, Mu $ AOBJECT p xs1)) (traverse step xs)
+      typingAST (ASTRING p x)  = return (TString p, string p x)
+      typingAST (AMERGE x y)   = typingMerge x y
+      typingAST (ASUBST p x)   = typingSubst p x
+      typingAST (ALIST p xs)   = typingList p xs
+      typingAST (AOBJECT p xs) = typingObject p xs
+
+typingMerge :: Monad m => Typing m -> Typing m -> Typing m
+typingMerge x y = do
+  (tx, x1) <- x
+  (ty, y1) <- y
+  constrs  <- gets tsConstraints
+  modify (\s -> s{tsConstraints=(Constraint tx ty:constrs)})
+  return (tx, merge x1 y1)
+
+typingSubst :: Monad m => Position -> String -> Typing m
+typingSubst p x = liftM go (gets tsType)
+  where
+    go m = (maybe (TVar p x) (updatePos p) (M.lookup x m), subst p x)
+
+typingList :: Monad m => Position -> [Typing m] -> Typing m
+typingList  p xs = do
+  xstype <- sequence xs
+  case xstype of
+    []         -> return (TNil p, nil p)
+    ((t,_):ts) -> 
+      let step s@TypeState{tsConstraints=cs0} =
+            s{tsConstraints=cs0 ++ fmap (Constraint t . fst) ts}  in
+      modify step >>
+      return (TList p t, list p (fmap snd xstype))
+
+typingObject :: (Monad m, Functor m) 
+             => Position 
+             -> [Prop String (Typing m)]
+             -> Typing m
+typingObject p xs = 
+  liftM (\xs1 -> (TObject p, object p xs1)) (traverse step xs)
+  where
+    step (Prop key x) = liftM (\(t, ast1) -> (Prop (key, t) ast1)) x
 
 checking :: StateT TypeState (Either String) ()
 checking = do
@@ -107,10 +136,10 @@ checking = do
           (TList _ _, TNil _)    -> ""
           (TNil _, TNil _)       -> ""
           (TVar px x, TVar py y) ->
-            let action = 
-                  do xtype <- fmap (updatePos px) (M.lookup x types)
-                     ytype <- fmap (updatePos py) (M.lookup y types)
-                     return $ go types (Constraint xtype ytype) in
+            let action =
+                  (\xtype ytype -> go types (Constraint xtype ytype)) <$>
+                  fmap (updatePos px) (M.lookup x types)              <*>
+                  fmap (updatePos py) (M.lookup y types) in
             maybe [] id action
           (TList p x, TList _ y) -> 
             let msg = go types (Constraint x y) 
@@ -132,23 +161,29 @@ register (Prop (key, typ) ast) =
   cata registerAST ast >>= \ast1 ->
     modify (M.insertWith const key (typ, ast1))
     where
-      registerAST (ASTRING p x) = return (Mu $ ASTRING p x)
-      registerAST (ASUBST p x)  = return (Mu $ ASUBST p x)
-      registerAST (ALIST p xs)  = fmap (Mu . ALIST p) (sequence xs) 
-      registerAST (AMERGE x y)  =
-        do xtype <- x
-           ytype <- y
-           case (out xtype, out ytype) of
-             (ALIST p vs, ALIST _ ws)     -> return $ Mu $ ALIST p (vs ++ ws)
-             (ASTRING p v, ASTRING _ w)   -> return $ Mu $ ASTRING p (v ++  " " ++ w)
-             (AOBJECT p vs, AOBJECT _ ws) -> return $ Mu $ AOBJECT p (vs ++ ws)
-             _                            -> return $ Mu $ AMERGE xtype ytype
-      registerAST (AOBJECT p props) =
-        let step (Prop (key, typ) f) =
-              do ast <- f
-                 modify (M.insertWith const key (typ, ast))
-                 return (Prop (key, typ) ast) in
-        fmap (Mu . AOBJECT p) (traverse step props)
+      registerAST (ASTRING p x)     = return $ string p x
+      registerAST (ASUBST p x)      = return $ subst p x
+      registerAST (ALIST p xs)      = fmap (list p) (sequence xs) 
+      registerAST (AMERGE x y)      = registerMerge x y
+      registerAST (AOBJECT p props) = registerObject p props
+        
+registerMerge :: Registering -> Registering -> Registering
+registerMerge x y = go <$> x <*> y
+  where
+    go xtype ytype =
+      case (out xtype, out ytype) of
+        (ALIST p vs, ALIST _ ws)     -> list p (vs ++ ws)
+        (ASTRING p v, ASTRING _ w)   -> string p (v ++  " " ++ w)
+        (AOBJECT p vs, AOBJECT _ ws) -> object p (vs ++ ws)
+        _                            -> merge xtype ytype
+
+registerObject :: Position -> [Prop (String, Type) Registering] -> Registering
+registerObject p props = fmap (object p) (traverse go props)
+  where
+    go (Prop (key, typ) f) = do
+      ast <- f
+      modify (M.insertWith const key (typ, ast))
+      return (Prop (key, typ) ast)
 
 showType :: Type -> String
 showType (TString _) = "String"
@@ -163,8 +198,6 @@ showPos (l, c) = "(line: " ++ show l ++ ", col: " ++ show c ++ ")"
 makeId :: Ident -> String
 makeId (Ident _ x)  = x
 makeId (Select x y) = (makeId x) ++ "." ++ (makeId y)
-
-initState = TypeState M.empty []
 
 position :: Type -> Position
 position (TString p) = p

@@ -68,3 +68,24 @@ instance Traversable (AST i) where
   traverse f (AOBJECT p xs) = fmap (AOBJECT p) (traverse (traverse f) xs)
   traverse f (ASTRING p x)  = pure (ASTRING p x)
   traverse f (ASUBST p x)   = pure (ASUBST p x)
+
+string :: Position -> String -> Mu (AST a)
+string p x = Mu $ ASTRING p x
+
+list :: Position -> [Mu (AST a)] -> Mu (AST a)
+list p xs = Mu $ ALIST p xs
+
+object :: Position -> [Prop a (Mu (AST a))] -> Mu (AST a)
+object p xs = Mu $ AOBJECT p xs
+
+subst :: Position -> String -> Mu (AST a)
+subst p x = Mu $ ASUBST p x
+
+merge :: Mu (AST a) -> Mu (AST a) -> Mu (AST a)
+merge x y = Mu $ AMERGE x y
+
+nil :: Position -> Mu (AST a)
+nil p = Mu $ ALIST p []
+
+property :: a -> Mu (AST a) -> Prop a (Mu (AST a))
+property a v = Prop a v

@@ -43,45 +43,42 @@ identSelect :: Production
 identSelect ((CToken p (ID x)):(CToken _ DOT):(CIdent id):xs) =
   (CIdent $ Select id (Ident p x), xs)
 
-string :: Production
-string ((CToken p (STRING x)):xs) = (CAst $ Mu $ ASTRING p x, xs)
-string ((CToken p (ID x)):xs)     = (CAst $ Mu $ ASTRING p x, xs) 
+stringP :: Production
+stringP ((CToken p (STRING x)):xs) = (CAst $ Mu $ ASTRING p x, xs)
+stringP ((CToken p (ID x)):xs)     = (CAst $ Mu $ ASTRING p x, xs) 
 
---identValue :: Production
---identValue ((CAst (Mu (ASTRING p x))):xs) = (Mu $ ASTRING x, xs)
-
-list :: Production
-list ((CToken _ RBRACK):(CToken p LBRACK):xs) = (CAst $ Mu $ ALIST p [], xs)
-list ((CToken _ RBRACK):(CAst (Mu (ALIST p values))):xs) = 
-  (CAst $ Mu $ ALIST p $ reverse values, xs)
-list (x@(CToken _ RBRACK):_:xs) = list (x:xs)
+listP :: Production
+listP ((CToken _ RBRACK):(CToken p LBRACK):xs) = (CAst $ nil p, xs)
+listP ((CToken _ RBRACK):(CAst (Mu (ALIST p values))):xs) = 
+  (CAst $ list p $ reverse values, xs)
+listP (x@(CToken _ RBRACK):_:xs) = listP (x:xs)
 
 listHead :: Production
 listHead ((CAst value):(CToken p LBRACK):xs) = (CAst $ Mu $ ALIST p [value], xs)
 listHead ((CAst value):(CToken _ COMMA):(CAst (Mu (ALIST p values))):xs) =
-  (CAst $ Mu $ ALIST p (value:values), xs)
+  (CAst $ list p (value:values), xs)
 listHead (x@(CAst value):y@(CToken _ COMMA):_:xs) = listHead (x:y:xs) 
 listHead (x@(CAst value):_:xs) = listHead (x:xs)
 
-subst :: Production
-subst ((CToken p (SUBST x)):xs) = (CAst $ Mu $ ASUBST p x, xs)
+substP :: Production
+substP ((CToken p (SUBST x)):xs) = (CAst $ subst p x, xs)
 
-merge :: Production
-merge ((CAst y):(CToken _ SPACE):(CAst x):xs) = (CAst $ Mu $ AMERGE x y, xs)
-merge (_:xs) = merge xs
+mergeP :: Production
+mergeP ((CAst y):(CToken _ SPACE):(CAst x):xs) = (CAst $ merge x y, xs)
+mergeP (_:xs) = mergeP xs
 
-object :: Production
-object ((CToken _ RBRACE):(CToken p LBRACE):xs) = (CAst $ Mu $ AOBJECT p [], xs)
-object ((CToken _ RBRACE):(CProps ps):(CToken p LBRACE):xs) =
-  (CAst $ Mu $ AOBJECT p $ reverse ps, xs)
-object (x@(CToken _ RBRACE):y@(CProps _):_:xs) = object (x:y:xs)
-object (x@(CToken _ RBRACE):_:xs) = object (x:xs)
+objectP :: Production
+objectP ((CToken _ RBRACE):(CToken p LBRACE):xs) = (CAst $ object p [], xs)
+objectP ((CToken _ RBRACE):(CProps ps):(CToken p LBRACE):xs) =
+  (CAst $ object p $ reverse ps, xs)
+objectP (x@(CToken _ RBRACE):y@(CProps _):_:xs) = objectP (x:y:xs)
+objectP (x@(CToken _ RBRACE):_:xs) = objectP (x:xs)
 
-property :: Production
-property (x@(CAst _):y@(CIdent _):(CToken _ SPACE):xs) = property (x:y:xs)
-property ((CAst value):(CIdent id):xs) = (CProp $ Prop id value, xs)
-property (x@(CAst value):_:xs) = property (x:xs)
-property (_:xs) = property xs -- trailling space, ex: id: value_[end]
+propertyP :: Production
+propertyP (x@(CAst _):y@(CIdent _):(CToken _ SPACE):xs) = propertyP (x:y:xs)
+propertyP ((CAst value):(CIdent id):xs) = (CProp $ property id value, xs)
+propertyP (x@(CAst value):_:xs) = propertyP (x:xs)
+propertyP (_:xs) = propertyP xs -- trailling space, ex: id: value_[end]
 
 propertiesHead :: Production
 propertiesHead ((CProp p):xs) = (CProps [p], xs)
@@ -195,7 +192,7 @@ parseSelect = do
         when dot parseSelect
 
 parseString :: F LALR ()
-parseString = shift >> reduce string
+parseString = shift >> reduce stringP
 
 parseProperty :: F LALR ()
 parseProperty = do
@@ -209,7 +206,7 @@ parseProperty = do
       alt [(isEqual, shift >> step1)
           ,(isLBrace, parseObject)
           ,(anything, failure unexpected)]
-      reduce property
+      reduce propertyP
     
     step1 = shiftSpace >> parseValue
 
@@ -241,26 +238,26 @@ parseObject :: F LALR ()
 parseObject = do
   shift
   shiftSpaceOrNewline
-  alt [(isRBrace, shift >> reduce object)
+  alt [(isRBrace, shift >> reduce objectP)
       ,(anything, parseProperties >> end)]
     
   where
     end =
-      alt [(isRBrace, shift >> reduce object)
+      alt [(isRBrace, shift >> reduce objectP)
           ,(anything, failure unexpected)]
 
 parseList :: F LALR ()
 parseList = do 
   shift
   shiftSpaceOrNewline
-  alt [(isRBrack, shift >> reduce list)
+  alt [(isRBrack, shift >> reduce listP)
       ,(anything, go)]
 
   where
     go = do
       parseListHead
       shiftSpaceOrNewline
-      alt [(isRBrack, shift >> reduce list)
+      alt [(isRBrack, shift >> reduce listP)
           ,(anything, failure unexpected)]
 
 parseListHead :: F LALR ()
@@ -289,7 +286,7 @@ parseMerge = do
   where
     go = do
       parseValue
-      reduce merge
+      reduce mergeP
       alt [(isSpace, parseMerge)
           ,(anything, return ())]
 
@@ -297,7 +294,7 @@ parseValue :: F LALR ()
 parseValue = do
   alt [(isString, parseString)
       ,(isId, parseString)
-      ,(isSubst, shift >> reduce subst)
+      ,(isSubst, shift >> reduce substP)
       ,(isLBrack, parseList)
       ,(isLBrace, parseObject)
       ,(anything, failure unexpected)]
