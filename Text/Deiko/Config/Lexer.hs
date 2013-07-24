@@ -8,7 +8,7 @@ import Data.Conduit (Conduit, ConduitM, yield, await)
 import Data.ByteString.Char8 (unpack)
 import Data.Foldable (Foldable, traverse_)
 import Data.Char (isLetter, isDigit)
-import Text.Deiko.Config.Internal
+import Text.Deiko.Config.Internal hiding (makeId)
 
 data StringState = None
                 | Simple

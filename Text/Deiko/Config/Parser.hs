@@ -2,6 +2,7 @@
 module Text.Deiko.Config.Parser where
 
 import Control.Monad
+import Control.Monad.Error
 import Control.Monad.Free (Free, wrap)
 import Control.Monad.Free.Church (F, fromF)
 import Data.Conduit
@@ -34,7 +35,7 @@ type Stack = [Cell]
 type Production = Stack -> (Cell, Stack)
 
 type Transformation m = 
-  (Stack, Maybe Token) -> Conduit Token m (Either String [Property Ident])
+  (Stack, Maybe Token) -> Conduit Token (ErrorT ConfigError m) [Property Ident]
 
 identSimple :: Production
 identSimple ((CToken p (ID x)):xs) = (CIdent $ Ident p x, xs)
@@ -318,10 +319,10 @@ toCell EOF         = CEOF
 
 makeParser :: Monad m 
            => Free LALR () 
-           -> Conduit Token m (Either String [Property Ident])
+           -> Conduit Token (ErrorT ConfigError m) [Property Ident]
 makeParser instr = (cataFree pure impure instr) ([], Nothing)
   where
-    pure _ (((CProps xs):_),_) = yield (Right $ reverse xs)
+    pure _ (((CProps xs):_),_) = yield (reverse xs)
 
     impure (Shift k)       = shifting k
     impure (Reduce p k)    = reducing p k
@@ -347,7 +348,7 @@ looking p k (stack, ahead) = maybe (recv go) go ahead
     go h = k (p h) (stack, Just h)
 
 failing :: Monad m => (Token -> String) -> Transformation m
-failing k (_, (Just h)) = yield $ Left (k h) 
+failing k (_, (Just h)) = lift $ throwError (ConfigError $ k h) 
 
 reporting :: Transformation m 
 reporting (stack, _) = error $ show stack
@@ -357,5 +358,5 @@ unexpected (Elm l c sym) =
   "Unexpected token " ++ show sym ++ " at (" ++ show l ++ ", " ++ show c ++ ")" 
 
 parser :: Monad m 
-       => Conduit Token m (Either String [Property Ident])
+       => Conduit Token (ErrorT ConfigError m) [Property Ident]
 parser = makeParser (fromF parseProperties)

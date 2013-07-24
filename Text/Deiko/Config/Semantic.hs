@@ -1,8 +1,9 @@
-module Text.Deiko.Config.Semantic (Type(..), Register, typecheck) where
+module Text.Deiko.Config.Semantic (Type(..), Register, typecheck, showType) where
 
 import Prelude hiding (sequence)
 import Control.Applicative (Applicative (..), (<$>))
 import Control.Monad (liftM)
+import Control.Monad.Error hiding (sequence)
 import Control.Monad.State (StateT, State, modify, gets, get
                            , execState, evalState, evalStateT)
 import Control.Monad.Trans (lift)
@@ -13,14 +14,8 @@ import Data.Traversable (traverse, sequence)
 import Text.Deiko.Config.Util
 import Text.Deiko.Config.Internal
 
-data Type = TString Position
-          | TVar Position String
-          | TList Position Type
-          | TNil Position
-          | TObject Position deriving Show
-
 type Scoping = String -> Mu (AST String)
-type Typing m = StateT TypeState m (Type, Mu (AST (String, Type)))
+type Typing m = StateT TypeState (ErrorT ConfigError m) (Type, Mu (AST (String, Type)))
 type Registering = State Register (Mu (AST (String, Type)))
 
 data Constraint = Constraint Type Type deriving Show
@@ -28,19 +23,19 @@ data Constraint = Constraint Type Type deriving Show
 data TypeState = TypeState { tsType        :: M.Map String Type
                            , tsConstraints :: [Constraint] } deriving Show
 
-type Register = M.Map String (Type, Mu (AST (String, Type)))
+typecheck :: (Functor m, Monad m) 
+          => Conduit [Property Ident] (ErrorT ConfigError m) Register
+typecheck = awaitForever ((yield =<<) . lift . semantic)
 
-typecheck :: Monad m 
-          => Conduit (Either String [Property Ident]) m (Either String Register)
-typecheck = awaitForever (yield . (semantic =<<))
-
-semantic :: [Property Ident] -> Either String Register
+semantic :: (Functor m, Monad m)
+         => [Property Ident]
+         -> ErrorT ConfigError m Register
 semantic props = 
   let props2 = fmap scoping props
       action = traverse typing props2 >>= \props3 ->
                fmap (const $ execState (traverse register props3) M.empty)
                     checking in
-  evalStateT action (TypeState M.empty [])      
+  evalStateT action (TypeState M.empty [])
 
 scoping :: Property Ident -> Property String
 scoping (Prop id ast) = Prop key ((para scopingAST ast) (key ++ "."))
@@ -76,7 +71,7 @@ scopingObject p props scope =
 
 typing :: (Monad m, Functor m) 
        => Property String 
-       -> StateT TypeState m (Property (String, Type))
+       -> StateT TypeState (ErrorT ConfigError m) (Property (String, Type))
 typing (Prop key ast) = do
   (t, ast1) <- cata typingAST ast
   modify (\s@TypeState{tsType=m} -> s{tsType=M.insertWith const key t m})
@@ -121,12 +116,12 @@ typingObject p xs =
   where
     step (Prop key x) = liftM (\(t, ast1) -> (Prop (key, t) ast1)) x
 
-checking :: StateT TypeState (Either String) ()
+checking :: Monad m => StateT TypeState (ErrorT ConfigError m) ()
 checking = do
   (TypeState types constrs) <- get
   case foldMap (go types) constrs of
-    []  -> lift $ Right ()
-    msg -> lift $ Left msg 
+    []  -> return ()
+    msg -> throwError (ConfigError msg) 
     where
       go types (Constraint x y) =
         case (x, y) of
@@ -187,31 +182,3 @@ registerObject p props = fmap (object p) (traverse go props)
       ast <- f
       modify (M.insertWith const key (typ, ast))
       return (Prop (key, typ) ast)
-
-showType :: Type -> String
-showType (TString _) = "String"
-showType (TObject _) = "Object"
-showType (TList _ t) = "List[" ++ showType t ++ "]"
-showType (TNil _)    = "List[A]"
-showType (TVar _ x)  = "typeof(" ++ x ++ ")"
-
-showPos :: Position -> String
-showPos (l, c) = "(line: " ++ show l ++ ", col: " ++ show c ++ ")"
-
-makeId :: Ident -> String
-makeId (Ident _ x)  = x
-makeId (Select x y) = (makeId x) ++ "." ++ (makeId y)
-
-position :: Type -> Position
-position (TString p) = p
-position (TVar p _)  = p
-position (TList p _) = p
-position (TNil p)    = p
-position (TObject p) = p
-
-updatePos :: Position -> Type -> Type
-updatePos p (TString _) = TString p
-updatePos p (TVar _ x)  = TVar p x
-updatePos p (TList _ x) = TList p x
-updatePos p (TNil _)    = TNil p
-updatePos p (TObject _) = TObject p
