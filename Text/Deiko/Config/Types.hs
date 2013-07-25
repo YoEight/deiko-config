@@ -8,10 +8,10 @@ import Text.Deiko.Config.Internal
 import Text.Deiko.Config.Util
 
 class ConfigValue v where
-  configValue :: Monad m 
+  configValue :: Monad m
               => String
-              -> Type 
-              -> Mu (AST (String, Type)) 
+              -> Type
+              -> Mu (AST (String, Type))
               -> ErrorT ConfigError m v
 
 instance ConfigValue String where
@@ -51,4 +51,4 @@ parseTypeError key expected found = ConfigError msg
           ++ " for [" ++ key ++ "]"
 
 stringType :: Type
-stringType = (TString (-1, -1))
+stringType = TString (-1, -1)

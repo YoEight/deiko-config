@@ -1,15 +1,18 @@
-module Text.Deiko.Config.Semantic (Type(..), Register, typecheck, showType) where
+module Text.Deiko.Config.Semantic (Type(..)
+                                  ,Config(..)
+                                  ,Register
+                                  ,typecheck
+                                  , showType) where
 
 import Prelude hiding (sequence)
 import Control.Applicative (Applicative (..), (<$>))
-import Control.Monad (liftM)
 import Control.Monad.Error hiding (sequence)
-import Control.Monad.State (StateT, State, modify, gets, get
-                           , execState, evalState, evalStateT)
-import Control.Monad.Trans (lift)
-import Data.Conduit (Conduit, awaitForever, yield)
+import Control.Monad.State (StateT, State, execState, evalState, evalStateT)
+import Control.Monad.RWS (RWS, modify, get, gets, ask, asks, runRWS)
+import Data.Conduit (Conduit, awaitForever, yield, (=$=))
 import Data.Foldable (traverse_, foldMap)
 import qualified Data.Map as M
+import Data.Monoid (Monoid(..))
 import Data.Traversable (traverse, sequence)
 import Text.Deiko.Config.Util
 import Text.Deiko.Config.Internal
@@ -17,25 +20,42 @@ import Text.Deiko.Config.Internal
 type Scoping = String -> Mu (AST String)
 type Typing m = StateT TypeState (ErrorT ConfigError m) (Type, Mu (AST (String, Type)))
 type Registering = State Register (Mu (AST (String, Type)))
+type Phase a m o = Conduit a (ErrorT ConfigError m) o
 
 data Constraint = Constraint Type Type deriving Show
 
 data TypeState = TypeState { tsType        :: M.Map String Type
                            , tsConstraints :: [Constraint] } deriving Show
 
-typecheck :: (Functor m, Monad m) 
-          => Conduit [Property Ident] (ErrorT ConfigError m) Register
-typecheck = awaitForever ((yield =<<) . lift . semantic)
+data Config = Config { cReg     :: Register
+                     , cState   :: TypeState } deriving Show
 
-semantic :: (Functor m, Monad m)
-         => [Property Ident]
-         -> ErrorT ConfigError m Register
-semantic props = 
-  let props2 = fmap scoping props
-      action = traverse typing props2 >>= \props3 ->
-               fmap (const $ execState (traverse register props3) M.empty)
-                    checking in
-  evalStateT action (TypeState M.empty [])
+typecheck :: (Functor m, Monad m) => Phase [Property Ident] m Config
+typecheck = typingPhase =$= withDefaultReg =$= checkingPhase
+
+typingPhase :: (Functor m, Monad m)
+            => Phase [Property Ident] m ([Property (String, Type)], TypeState)
+typingPhase = awaitForever go
+  where
+    go props =
+      let props2 = fmap scoping props
+          action = (,) <$> traverse typing props2 <*> get
+          action2 = lift $ evalStateT action (TypeState M.empty []) in
+      action2 >>= yield
+
+withDefaultReg :: Monad m => Phase (a, b) m (a, b, Register)
+withDefaultReg = awaitForever go
+  where
+    go (a, b) = yield (a, b, M.empty)
+
+checkingPhase :: Monad m
+              => Phase ([Property (String, Type)], TypeState, Register) m Config
+checkingPhase = awaitForever go
+  where
+    go (props, state, reg) =
+      let reg2         = execState (traverse register props) reg
+          step constrs = yield $ Config reg2 state{tsConstraints=constrs} in
+      lift (checking state) >>= step
 
 scoping :: Property Ident -> Property String
 scoping (Prop id ast) = Prop key ((para scopingAST ast) (key ++ "."))
@@ -51,17 +71,17 @@ scopingAST (AOBJECT p xs)           = scopingObject p xs
 
 scopingList :: Position -> [(Mu (AST Ident), a)] -> Scoping
 scopingList p [] _              = nil p
-scopingList p ((Mu ast, _):_) _ = 
-  case ast of 
+scopingList p ((Mu ast, _):_) _ =
+  case ast of
     ALIST _ as -> list p (fmap (\a -> para scopingAST a "") as)
 
 scopingMerge :: Scoping -> Scoping -> Scoping
 scopingMerge fx fy scope = merge (fx scope) (fy scope)
 
-scopingObject :: Position 
+scopingObject :: Position
               -> [Prop Ident (Mu (AST Ident), Scoping)]
               -> Scoping
-scopingObject p props scope = 
+scopingObject p props scope =
   object p (fmap step props')
     where
       props' = fmap (fmap snd) props
@@ -69,8 +89,8 @@ scopingObject p props scope =
         let key = scope ++ makeId id in
         property key (f (key ++ "."))
 
-typing :: (Monad m, Functor m) 
-       => Property String 
+typing :: (Monad m, Functor m)
+       => Property String
        -> StateT TypeState (ErrorT ConfigError m) (Property (String, Type))
 typing (Prop key ast) = do
   (t, ast1) <- cata typingAST ast
@@ -101,55 +121,74 @@ typingList  p xs = do
   xstype <- sequence xs
   case xstype of
     []         -> return (TNil p, nil p)
-    ((t,_):ts) -> 
+    ((t,_):ts) ->
       let step s@TypeState{tsConstraints=cs0} =
             s{tsConstraints=cs0 ++ fmap (Constraint t . fst) ts}  in
       modify step >>
       return (TList p t, list p (fmap snd xstype))
 
-typingObject :: (Monad m, Functor m) 
-             => Position 
+typingObject :: (Monad m, Functor m)
+             => Position
              -> [Prop String (Typing m)]
              -> Typing m
-typingObject p xs = 
+typingObject p xs =
   liftM (\xs1 -> (TObject p, object p xs1)) (traverse step xs)
   where
     step (Prop key x) = liftM (\(t, ast1) -> (Prop (key, t) ast1)) x
 
-checking :: Monad m => StateT TypeState (ErrorT ConfigError m) ()
-checking = do
-  (TypeState types constrs) <- get
-  case foldMap (go types) constrs of
-    []  -> return ()
-    msg -> throwError (ConfigError msg) 
-    where
-      go types (Constraint x y) =
-        case (x, y) of
-          (TString _, TString _) -> ""
-          (TObject _, TObject _) -> ""
-          (TNil _, TList _ _)    -> ""
-          (TList _ _, TNil _)    -> ""
-          (TNil _, TNil _)       -> ""
-          (TVar px x, TVar py y) ->
-            let action =
-                  (\xtype ytype -> go types (Constraint xtype ytype)) <$>
-                  fmap (updatePos px) (M.lookup x types)              <*>
-                  fmap (updatePos py) (M.lookup y types) in
-            maybe [] id action
-          (TList p x, TList _ y) -> 
-            let msg = go types (Constraint x y) 
-                ctx = "In context of List " ++ showPos p ++ " " in
-            if null msg then msg else ctx ++ msg
-          (x, y) ->
-            let xlabel = showType x
-                ylabel = showType y
-                xpos   = showPos $ position x
-                ypos   = showPos $ position y
-                msg    = "Expected " ++ 
-                         xlabel ++ " " ++ xpos ++ 
-                         " but having " ++ ylabel ++ 
-                         " " ++ ypos ++ "\n" in
-            msg
+check :: Constraint -> RWS (M.Map String Type) () [Constraint] String
+check (Constraint (TString _) (TString _))   = return ""
+check (Constraint (TObject _) (TObject _))   = return ""
+check (Constraint (TNil _) (TList _ _))      = return ""
+check (Constraint (TList _ _) (TNil _))      = return ""
+check (Constraint (TNil _) (TNil _))         = return ""
+check (Constraint (TList px x) (TList py y)) = checkList (px, x) (py, y)
+check (Constraint (TVar p x) typ)            = checkSubst (p, x) typ
+check c                                      = checkFail c
+
+checkList :: (Position, Type)
+          -> (Position, Type)
+          -> RWS (M.Map String Type) () [Constraint] String
+checkList (px, x) (py, y) = fmap go (check (Constraint x y))
+  where
+    go msg
+      | null msg  = msg
+      | otherwise = listCheckError px msg
+
+checkSubst :: (Position, String)
+           -> Type
+           -> RWS (M.Map String Type) () [Constraint] String
+checkSubst (p, x) y =
+  ask >>= \types ->
+    let step = \x y -> check (Constraint x y)
+        resx = fmap (updatePos p) (M.lookup x types)
+        resy = case y of
+                 TVar py ky -> fmap (updatePos py) (M.lookup ky types)
+                 _          -> Just y
+        unresolved = fmap (const "") (modify (Constraint (TVar p x) y:))
+        action     = step <$> resx <*> resy in
+    maybe unresolved id action
+
+checkFail :: Constraint -> RWS (M.Map String Type) () [Constraint] String
+checkFail (Constraint x y) = return msg
+  where
+     xlabel = showType x
+     ylabel = showType y
+     xpos   = showPos $ position x
+     ypos   = showPos $ position y
+     msg    = "Expected " ++
+              xlabel ++ " " ++ xpos ++
+              " but having " ++ ylabel ++
+              " " ++ ypos ++ "\n"
+
+listCheckError :: Position -> String -> String
+listCheckError p e = "In context of List " ++ showPos p ++ ": " ++ e
+
+checking :: Monad m => TypeState -> ErrorT ConfigError m [Constraint]
+checking (TypeState types constrs) =
+  let action          = fmap mconcat (traverse check constrs)
+      (msg, unres, _) = runRWS action types [] in
+  if null msg then return unres else throwError (ConfigError msg)
 
 register :: Property (String, Type) -> State Register ()
 register (Prop (key, typ) ast) =
@@ -158,13 +197,13 @@ register (Prop (key, typ) ast) =
     where
       registerAST (ASTRING p x)     = return $ string p x
       registerAST (ASUBST p x)      = registerSubst p x
-      registerAST (ALIST p xs)      = fmap (list p) (sequence xs) 
+      registerAST (ALIST p xs)      = fmap (list p) (sequence xs)
       registerAST (AMERGE x y)      = registerMerge x y
       registerAST (AOBJECT p props) = registerObject p props
 
 registerSubst :: Position -> String -> Registering
 registerSubst p x = liftM (maybe (subst p x) (snd . id)) (gets (M.lookup x))
-        
+
 registerMerge :: Registering -> Registering -> Registering
 registerMerge x y = go <$> x <*> y
   where
