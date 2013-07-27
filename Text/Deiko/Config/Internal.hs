@@ -1,10 +1,15 @@
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes       #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Text.Deiko.Config.Internal where
 
+import Control.Monad (liftM)
 import Control.Monad.Error
+import Control.Monad.Reader (MonadReader(..), asks)
 import Control.Applicative (Applicative(..), (<$>))
 import Data.Foldable (Foldable, foldMap)
 import qualified Data.Map as M
+import qualified Data.IntMap as I
+import Data.Hashable
 import Data.Monoid (Monoid(..))
 import Data.Traversable (Traversable, traverse)
 import Text.Deiko.Config.Util
@@ -26,12 +31,6 @@ data Sym = ID String
          | COMMA
          | DOT deriving Show
 
-data Type = TString Position
-          | TVar Position String
-          | TList Position Type
-          | TNil Position
-          | TObject Position deriving Show
-
 type Position = (Int, Int)
 
 data ConfigError = ConfigError String deriving Show
@@ -49,10 +48,21 @@ type Value a = Mu (AST a)
 
 type Property name = Prop name (Value name)
 
-type Register = M.Map String (Type, Mu (AST (String, Type)))
+type Register = SymbolTable ((Type, Value (String, Type)))
 
 data Ident = Ident Position String
            | Select Ident Ident deriving Show
+
+data Symbol = Symbol { symCode :: Int
+                     , symLbl  :: String } deriving Show
+
+type SymbolTable a = I.IntMap (Symbol, a)
+type TypeTable = I.IntMap Type
+
+type Type = Mu (Cons (String, Bool, Int))
+
+instance Eq Symbol where
+  Symbol h _ == Symbol i _ = h == i
 
 instance Functor (Prop i) where
   fmap f (Prop id a) = Prop id (f a)
@@ -75,7 +85,7 @@ instance Foldable (AST i) where
   foldMap f (ALIST _ xs)   = foldMap f xs
   foldMap _ (ASUBST _ _)   = mempty
   foldMap f (AMERGE x y)   = f x `mappend` f y
-  foldMap f (AOBJECT _ xs) = foldMap (foldMap f) xs 
+  foldMap f (AOBJECT _ xs) = foldMap (foldMap f) xs
 
 instance Traversable (AST i) where
   traverse f (ALIST p xs)   = fmap (ALIST p) (traverse f xs)
@@ -109,12 +119,38 @@ nil p = Mu $ ALIST p []
 property :: a -> Value a -> Property a
 property a v = Prop a v
 
-showType :: Type -> String
-showType (TString _) = "String"
-showType (TObject _) = "Object"
-showType (TList _ t) = "List[" ++ showType t ++ "]"
-showType (TNil _)    = "List[A]"
-showType (TVar _ x)  = "typeof(" ++ x ++ ")"
+resolveType :: MonadReader TypeTable m => Type -> m (Maybe Int)
+resolveType typ = (cata go typ) 0
+  where
+    go Nil hascode = return (Just hascode)
+    go (Cons (_, ref, h) k) hashcode
+       | ref       = step h hashcode
+       | otherwise = k (hash (h, hashcode))
+
+    step h hashcode =
+      (maybe (return Nothing) (($ hashcode) . cata go)) =<< asks (I.lookup h)
+
+sameType :: MonadReader TypeTable m => Type -> Type -> m Bool
+sameType x y = do
+  rx <- resolveType x
+  ry <- resolveType y
+  return (rx == ry)
+
+showType :: MonadReader TypeTable m => Type -> m String
+showType = cata go
+  where
+    go Nil = return ""
+    go (Cons (lbl, ref, h) k)
+       | ref       = step h lbl
+       | otherwise =
+         let f s
+               | null s    = lbl
+               | otherwise = lbl ++ "[" ++ s  ++ "]" in
+         liftM f k
+
+    step h lbl =
+      let str = "typeof(" ++ lbl ++ ")" in
+      (maybe (return str) (cata go)) =<< asks (I.lookup h)
 
 showPos :: Position -> String
 showPos (l, c) = "(line: " ++ show l ++ ", col: " ++ show c ++ ")"
@@ -123,16 +159,68 @@ makeId :: Ident -> String
 makeId (Ident _ x)  = x
 makeId (Select x y) = (makeId x) ++ "." ++ (makeId y)
 
-position :: Type -> Position
-position (TString p) = p
-position (TVar p _)  = p
-position (TList p _) = p
-position (TNil p)    = p
-position (TObject p) = p
+pos :: Mu (AST a) -> Position
+pos = cata go
+  where
+    go (ASTRING p _) = p
+    go (ASUBST p _)  = p
+    go (ALIST p _)   = p
+    go (AMERGE p _)  = p
+    go (AOBJECT p _) = p
 
-updatePos :: Position -> Type -> Type
-updatePos p (TString _) = TString p
-updatePos p (TVar _ x)  = TVar p x
-updatePos p (TList _ x) = TList p x
-updatePos p (TNil _)    = TNil p
-updatePos p (TObject _) = TObject p
+mkSymbol :: String -> Symbol
+mkSymbol s = Symbol (hash s) s
+
+stringSym :: Symbol
+stringSym = mkSymbol "String"
+
+objectSym :: Symbol
+objectSym = mkSymbol "Object"
+
+listSym :: Symbol
+listSym = mkSymbol "List"
+
+stringCode :: Int
+stringCode = symCode stringSym
+
+objectCode :: Int
+objectCode = symCode objectSym
+
+listCode :: Int
+listCode = hash "List"
+
+listCodeOf :: Int -> Int
+listCodeOf h = hash ("List", h)
+
+anyVal :: Symbol
+anyVal = Symbol anyValCode "A"
+
+stringType :: Type
+stringType = singleType "String"
+
+objectType :: Type
+objectType = singleType "Object"
+
+listType :: Type
+listType = singleType "List"
+
+listTypeOf :: Type -> Type
+listTypeOf t = higherType t listType
+
+anyType :: Type
+anyType = Mu (Cons ("A", False, hash "*") (Mu Nil))
+
+anyValCode :: Int
+anyValCode = (hash "*")
+
+singleType :: String -> Type
+singleType i = Mu (Cons (i, False, hash i) (Mu Nil))
+
+refType :: String -> Type
+refType i = Mu (Cons (i, True, hash i) (Mu Nil))
+
+higherType :: Type -> Type -> Type
+higherType i = cata go
+  where
+    go (Cons h t) = Mu (Cons h t)
+    go Nil        = i

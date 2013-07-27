@@ -5,6 +5,7 @@
 module Text.Deiko.Config where
 
 import Control.Monad.Error
+import Control.Monad.Reader (MonadReader, ReaderT (..))
 import Control.Monad.Trans (MonadIO (..))
 import Control.Monad.Trans.Resource (MonadResource)
 import Data.Conduit (Conduit, Producer, Sink, Source, ($=), ($$), (=$=), yield
@@ -13,10 +14,12 @@ import Data.Conduit.Binary (sourceFile)
 import Data.ByteString.Char8 (ByteString, unpack)
 import Data.Foldable (traverse_)
 import qualified Data.Map as M
+import qualified Data.IntMap as IM
+import Data.Hashable
 import Text.Deiko.Config.Lexer (lexer)
 import Text.Deiko.Config.Parser (parser)
 import Text.Deiko.Config.Semantic
-import Text.Deiko.Config.Util (Mu(..))
+import Text.Deiko.Config.Util (Mu(..), cata)
 import Text.Deiko.Config.Types
 import qualified Text.Deiko.Config.Internal as I
 
@@ -35,13 +38,13 @@ class TypeOf t where
   typeof :: Val t a -> Type
 
 instance TypeOf CString where
-  typeof _ = TString falsePos
+  typeof _ = I.stringType
 
 instance TypeOf CObject where
-  typeof _ = TObject falsePos
+  typeof _ = I.objectType
 
 instance TypeOf t => TypeOf (CList t) where
-  typeof _ = TList falsePos (typeof (undefined :: Val t a))
+  typeof _ = I.listTypeOf (typeof (undefined :: Val t a))
 
 instance TypeOf v => ToParams (String, Val v (String, Type)) where
   toParams (key, v) = [prop key v]
@@ -57,9 +60,9 @@ getValue :: (Monad m, ConfigValue v)
          => String
          -> Config
          -> ErrorT I.ConfigError m v
-getValue key = maybe (throwError $ propertyNotFound key) go . M.lookup key . cReg
+getValue key (Config reg st) = maybe (throwError $ propertyNotFound key) go (IM.lookup (hash key) reg)
   where
-    go (typ, value) = configValue key typ value
+    go (_, (typ, value)) = runReaderT (configValue key typ value) (tsTable st)
 
 falsePos :: I.Position
 falsePos = (-1, -1)

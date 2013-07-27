@@ -8,6 +8,10 @@ import Control.Monad.Free (Free(..))
 data Cons a b = Cons a b
               | Nil
 
+instance Functor (Cons a) where
+  fmap f (Cons a b) = Cons a (f b)
+  fmap _ Nil        = Nil
+
 newtype Mu f = Mu (f (Mu f))
 
 instance Show (f (Mu f)) => Show (Mu f) where
@@ -20,7 +24,7 @@ cata :: Functor f => (f a -> a) -> Mu f -> a
 cata k = k . fmap (cata k) . out
 
 para :: Functor f => (f (Mu f, a) -> a) -> Mu f -> a
-para k x@(Mu m) = k $ fmap (\m' -> (x, para k m')) m 
+para k x@(Mu m) = k $ fmap (\m' -> (x, para k m')) m
 
 cataList :: (Cons a b -> b) -> [a] -> b
 cataList k [] = k Nil
