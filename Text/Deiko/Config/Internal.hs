@@ -48,21 +48,14 @@ type Value a = Mu (AST a)
 
 type Property name = Prop name (Value name)
 
-type Register = SymbolTable ((Type, Value (String, Type)))
+type Register = I.IntMap (Type, Value (String, Type))
 
 data Ident = Ident Position String
            | Select Ident Ident deriving Show
 
-data Symbol = Symbol { symCode :: Int
-                     , symLbl  :: String } deriving Show
-
-type SymbolTable a = I.IntMap (Symbol, a)
 type TypeTable = I.IntMap Type
 
 type Type = Mu (Cons (String, Bool, Int))
-
-instance Eq Symbol where
-  Symbol h _ == Symbol i _ = h == i
 
 instance Functor (Prop i) where
   fmap f (Prop id a) = Prop id (f a)
@@ -168,32 +161,14 @@ pos = cata go
     go (AMERGE p _)  = p
     go (AOBJECT p _) = p
 
-mkSymbol :: String -> Symbol
-mkSymbol s = Symbol (hash s) s
-
-stringSym :: Symbol
-stringSym = mkSymbol "String"
-
-objectSym :: Symbol
-objectSym = mkSymbol "Object"
-
-listSym :: Symbol
-listSym = mkSymbol "List"
-
 stringCode :: Int
-stringCode = symCode stringSym
+stringCode = hash "String"
 
 objectCode :: Int
-objectCode = symCode objectSym
+objectCode = hash "Object"
 
 listCode :: Int
 listCode = hash "List"
-
-listCodeOf :: Int -> Int
-listCodeOf h = hash ("List", h)
-
-anyVal :: Symbol
-anyVal = Symbol anyValCode "A"
 
 stringType :: Type
 stringType = singleType "String"

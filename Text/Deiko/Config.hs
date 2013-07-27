@@ -62,7 +62,7 @@ getValue :: (Monad m, ConfigValue v)
          -> ErrorT I.ConfigError m v
 getValue key (Config reg st) = maybe (throwError $ propertyNotFound key) go (IM.lookup (hash key) reg)
   where
-    go (_, (typ, value)) = runReaderT (configValue key typ value) (tsTable st)
+    go (typ, value) = runReaderT (configValue key typ value) (tsTable st)
 
 falsePos :: I.Position
 falsePos = (-1, -1)

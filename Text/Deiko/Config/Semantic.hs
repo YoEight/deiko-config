@@ -179,10 +179,6 @@ checkFail (px, symx) (py, symy) = do
                         " but having " ++ ylabel ++
                         " " ++ ypos ++ "\n"
 
-cxtCheckError :: Position -> Symbol -> String -> String
-cxtCheckError p sym e =
-  "In context of " ++ symLbl sym ++ " " ++ showPos p ++ ": " ++ e
-
 checking :: Monad m => TypeState -> ErrorT ConfigError m [Constraint]
 checking (TypeState types constrs) =
   let action          = fmap mconcat (traverse check constrs)
@@ -192,10 +188,8 @@ checking (TypeState types constrs) =
 register :: Property (String, Type) -> State Register ()
 register (Prop (key, typ) ast) =
   cata registerAST ast >>= \ast1 ->
-    modify (I.insert (symCode sym) (sym, (typ, ast1)))
+    modify (I.insert (hash key) (typ, ast1))
     where
-      sym = mkSymbol key
-
       registerAST (ASTRING p x)     = return $ string p x
       registerAST (ASUBST p x)      = return $ subst p x
       registerAST (ALIST p xs)      = fmap (list p) (sequence xs)
@@ -217,6 +211,5 @@ registerObject p props = fmap (object p) (traverse go props)
   where
     go (Prop (key, typ) f) =
       f >>= \ast ->
-        let sym = mkSymbol key in
-        modify (I.insert (symCode sym) (sym, (typ, ast))) >>
+        modify (I.insert (hash key) (typ, ast)) >>
         return (Prop (key, typ) ast)
