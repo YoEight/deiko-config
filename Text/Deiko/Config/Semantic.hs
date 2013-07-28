@@ -262,6 +262,6 @@ merging :: (Type, Value (String, Type))
         -> (Type, Value (String, Type))
 merging (tx, vx) (_, vy) =
   case (vx, vy) of
-    (Mu (ASTRING p xs), Mu (ASTRING _ ys)) -> (tx, string p (xs ++ ys))
+    (Mu (ASTRING p xs), Mu (ASTRING _ ys)) -> (tx, string p (xs ++ " " ++ ys))
     (Mu (ALIST p xs), Mu (ALIST _ ys))     -> (tx, list p (xs ++ ys))
     (Mu (AOBJECT p xs), Mu (AOBJECT _ ys)) -> (tx, object p (xs ++ ys))

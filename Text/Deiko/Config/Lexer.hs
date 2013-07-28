@@ -14,8 +14,8 @@ data StringState = None
                 | Simple
                 | Raw [String]
 
-data LexerState = LexerState { lexLine  :: Int 
-                             , lexCol   :: Int 
+data LexerState = LexerState { lexLine  :: Int
+                             , lexCol   :: Int
                              , lexBrace :: Int
                              , lexBrack :: Int }
 
@@ -62,7 +62,7 @@ step ']'  = do
   i <- gets lexBrack
   if i <= 0 then unmatchedBracket
   else make RBRACK >> incrCol  >> decrBracket >> recv step nop
-step x 
+step x
   | isLetter x = makeId [] x
   | otherwise  = makeStr None [] x
 
@@ -71,7 +71,7 @@ stringStep = recv step1 untermStr
   where
     step1 '"' = recv step2 (make $ STRING "")
     step1 x   = makeStr Simple [] x
-                
+
     step2 '"' = recv (makeStr (Raw []) []) untermStr
     step2 x   = (make $ STRING "") >>
                 incrColBy 2        >>
@@ -90,18 +90,18 @@ makeId :: Monad m => String -> Char -> Lexer m ()
 makeId acc x
   | validIdChar x           = recv (makeId (x:acc)) (produce True)
   | x == ' ' || x == '\n' ||
-    x == '.' || x == ':'  ||   
+    x == '.' || x == ':'  ||
     x == '=' || x == '{'  ||
     x == '}'                = produce False >> incrColBy (length acc) >> step x
   | otherwise               = makeStr None acc x
   where
-    produce eof = 
+    produce eof =
       let xs = if eof then x:acc else acc in
       make $ ID $ reverse xs
 
 makeStr :: Monad m => StringState -> String -> Char -> Lexer m ()
 makeStr state acc x
-  | x == '\n' = case state of 
+  | x == '\n' = case state of
                   None   -> produce0 >> incrColBy (length acc) >> step x
                   Simple -> err
                   Raw xs -> recv (makeStr (Raw (acc:xs)) []) untermStr
@@ -110,18 +110,18 @@ makeStr state acc x
                   _    -> recv decide untermStr
   | x == '"'  = case state of
                   None   -> recv (makeStr state ('"':acc)) (produce x)
-                  Simple -> produce0                   >> 
-                            incrColBy ((length acc)+2) >> 
+                  Simple -> produce0                   >>
+                            incrColBy ((length acc)+2) >>
                             recv step nop
                   Raw _  -> recv step1 untermStr
-  | x == ',' || 
+  | x == ',' ||
     x == ']' = case state of
                  None -> produce0 >> incrColBy (length acc) >> step x
                  _    -> recv (makeStr state (x:acc)) untermStr
   | otherwise = case state of
                   None -> recv (makeStr state (x:acc)) (produce x)
                   _    -> recv (makeStr state (x:acc)) untermStr
-  where 
+  where
     step1 '"' = recv step2 untermStr
     step1 x   = makeStr state ('"':acc) x
 
@@ -130,10 +130,10 @@ makeStr state acc x
                  finalCol   >>
                  recv step nop
     step2 x   = makeStr state ('"':'"':acc) x
-    
+
     err = make $ ERROR "Newline is not allowed in a single line String"
 
-    finalLine = 
+    finalLine =
       case state of
         Raw xs -> incrLineBy $ length xs
 
@@ -142,37 +142,37 @@ makeStr state acc x
         Raw []     -> incrColBy (length acc + 3)
         Raw (xs:_) -> setCol (1 + length acc + 3)
 
-    produceRaw = 
+    produceRaw =
       case state of
         Raw xs -> make $ STRING str
           where
             str = foldl go "" (reverse $ fmap (reverse . trim) xs)
             go [] b = b
             go xs b = xs ++ " " ++ b
-          
+
     produce0     = make $ STRING (reverse acc)
     produce x    = make $ STRING (reverse (x:acc))
     produce2 x y = make $ STRING (reverse (y:x:acc))
 
-    decide y 
+    decide y
       | y == '{'  =
         let c1 = length acc in
         case acc of
           [] -> recv (makeSubst state []) (produce2 x y)
           _  -> produce0 >> incrColBy c1 >> recv (makeSubst state []) untermStr
-      | otherwise = makeStr state (x:acc) y 
+      | otherwise = makeStr state (x:acc) y
 
 makeSubst :: Monad m  => StringState -> String -> Char -> Lexer m ()
 makeSubst state acc x =
   case acc of
-    [] | isLetter x || 
+    [] | isLetter x ||
          x == '?'      -> recv (makeSubst state [x]) (string [x])
        | otherwise     -> recv (makeStr state (x:"{$")) (string [x])
 
     ['?'] | isLetter x -> recv (makeSubst state (x:acc)) (string (x:acc))
           | otherwise  -> recv (makeStr state (x:"?{$")) (string (x:acc))
 
-    _  | validIdChar x || 
+    _  | validIdChar x ||
          x == '.'        -> recv (makeSubst state (x:acc)) (string (x:acc))
        | x == '}'        -> produce >> decision
        | otherwise       -> string (x:acc)
@@ -192,10 +192,10 @@ makeSubst state acc x =
 stripComment :: Monad m => Lexer m ()
 stripComment = recv go nop
   where
-    go '\n' = incrLine >> stripNewlines step nop
+    go '\n' = step '\n'
     go _    = stripComment
 
-stripNewlines :: Monad m 
+stripNewlines :: Monad m
               => (Char -> Lexer m ()) -- continuation
               -> Lexer m ()           -- fallback
               -> Lexer m ()
@@ -204,7 +204,7 @@ stripNewlines k f = recv go f
     go '\n' = incrLine >> stripNewlines k f
     go x    = setCol 1 >> k x
 
-stripSpaces :: Monad m 
+stripSpaces :: Monad m
             => (Char -> Lexer m ()) -- continuation
             -> Lexer m ()           -- fallback
             -> Lexer m ()

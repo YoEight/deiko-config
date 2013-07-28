@@ -34,7 +34,7 @@ type Stack = [Cell]
 
 type Production = Stack -> (Cell, Stack)
 
-type Transformation m = 
+type Transformation m =
   (Stack, Maybe Token) -> Conduit Token (ErrorT ConfigError m) [Property Ident]
 
 identSimple :: Production
@@ -46,11 +46,11 @@ identSelect ((CToken p (ID x)):(CToken _ DOT):(CIdent id):xs) =
 
 stringP :: Production
 stringP ((CToken p (STRING x)):xs) = (CAst $ Mu $ ASTRING p x, xs)
-stringP ((CToken p (ID x)):xs)     = (CAst $ Mu $ ASTRING p x, xs) 
+stringP ((CToken p (ID x)):xs)     = (CAst $ Mu $ ASTRING p x, xs)
 
 listP :: Production
 listP ((CToken _ RBRACK):(CToken p LBRACK):xs) = (CAst $ nil p, xs)
-listP ((CToken _ RBRACK):(CAst (Mu (ALIST p values))):xs) = 
+listP ((CToken _ RBRACK):(CAst (Mu (ALIST p values))):xs) =
   (CAst $ list p $ reverse values, xs)
 listP (x@(CToken _ RBRACK):_:xs) = listP (x:xs)
 
@@ -58,7 +58,7 @@ listHead :: Production
 listHead ((CAst value):(CToken p LBRACK):xs) = (CAst $ Mu $ ALIST p [value], xs)
 listHead ((CAst value):(CToken _ COMMA):(CAst (Mu (ALIST p values))):xs) =
   (CAst $ list p (value:values), xs)
-listHead (x@(CAst value):y@(CToken _ COMMA):_:xs) = listHead (x:y:xs) 
+listHead (x@(CAst value):y@(CToken _ COMMA):_:xs) = listHead (x:y:xs)
 listHead (x@(CAst value):_:xs) = listHead (x:xs)
 
 substP :: Production
@@ -208,11 +208,12 @@ parseProperty = do
           ,(isLBrace, parseObject)
           ,(anything, failure unexpected)]
       reduce propertyP
-    
+
     step1 = shiftSpace >> parseValue
 
 parseProperties :: F LALR ()
 parseProperties = do
+  shiftSpaceOrNewline
   parseProperty
   reduce propertiesHead
   shiftSpace
@@ -229,7 +230,7 @@ parseProperties = do
       alt [(isEOF, reduce properties)
           ,(isRBrace, reduce properties)
           ,(anything, reduction)]
-      
+
     reduction = do
       parseProperty
       reduce properties
@@ -241,14 +242,14 @@ parseObject = do
   shiftSpaceOrNewline
   alt [(isRBrace, shift >> reduce objectP)
       ,(anything, parseProperties >> end)]
-    
+
   where
     end =
       alt [(isRBrace, shift >> reduce objectP)
           ,(anything, failure unexpected)]
 
 parseList :: F LALR ()
-parseList = do 
+parseList = do
   shift
   shiftSpaceOrNewline
   alt [(isRBrack, shift >> reduce listP)
@@ -282,6 +283,7 @@ parseMerge = do
   alt [(isRBrack, return ())
       ,(isRBrace, return ())
       ,(isEOF, return ())
+      ,(isNewline, return ())
       ,(anything, go)]
 
   where
@@ -306,9 +308,9 @@ alt :: [(Token -> Bool, F LALR ())] -> F LALR ()
 alt []               = return ()
 alt ((f, action):xs) = lookAhead f >>= go
   where
-    go isF 
+    go isF
       | isF       = action
-      | otherwise = alt xs 
+      | otherwise = alt xs
 
 recv :: Monad m => (Token -> Conduit Token m a) -> Conduit Token m a
 recv k = await >>= \t -> maybe (error "Exhausted source") k t
@@ -317,8 +319,8 @@ toCell :: Token -> Cell
 toCell (Elm l c s) = CToken (l, c) s
 toCell EOF         = CEOF
 
-makeParser :: Monad m 
-           => Free LALR () 
+makeParser :: Monad m
+           => Free LALR ()
            -> Conduit Token (ErrorT ConfigError m) [Property Ident]
 makeParser instr = (cataFree pure impure instr) ([], Nothing)
   where
@@ -336,27 +338,27 @@ shifting k (stack, ahead) = maybe (recv go) go ahead
     go t = k (toCell t:stack, Nothing)
 
 reducing :: Production -> Transformation m -> Transformation m
-reducing p k (stack, ahead) = 
+reducing p k (stack, ahead) =
   let (prod, stack1) = p stack in k ((prod:stack1), ahead)
 
-looking :: Monad m 
-        => (Token -> Bool) 
-        -> (Bool -> Transformation m) 
+looking :: Monad m
+        => (Token -> Bool)
+        -> (Bool -> Transformation m)
         -> Transformation m
 looking p k (stack, ahead) = maybe (recv go) go ahead
-  where 
+  where
     go h = k (p h) (stack, Just h)
 
 failing :: Monad m => (Token -> String) -> Transformation m
-failing k (_, (Just h)) = lift $ throwError (ConfigError $ k h) 
+failing k (_, (Just h)) = lift $ throwError (ConfigError $ k h)
 
-reporting :: Transformation m 
+reporting :: Transformation m
 reporting (stack, _) = error $ show stack
 
 unexpected :: Token -> String
-unexpected (Elm l c sym) = 
-  "Unexpected token " ++ show sym ++ " at (" ++ show l ++ ", " ++ show c ++ ")" 
+unexpected (Elm l c sym) =
+  "Unexpected token " ++ show sym ++ " at (" ++ show l ++ ", " ++ show c ++ ")"
 
-parser :: Monad m 
+parser :: Monad m
        => Conduit Token (ErrorT ConfigError m) [Property Ident]
 parser = makeParser (fromF parseProperties)
