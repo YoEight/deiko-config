@@ -12,6 +12,10 @@ instance Functor (Cons a) where
   fmap f (Cons a b) = Cons a (f b)
   fmap _ Nil        = Nil
 
+instance (Show a, Show b) => Show (Cons a b) where
+  show (Cons a b) = "Cons (" ++ show a ++ ", " ++ show b ++ ")"
+  show Nil        = "Nil"
+
 newtype Mu f = Mu (f (Mu f))
 
 instance Show (f (Mu f)) => Show (Mu f) where

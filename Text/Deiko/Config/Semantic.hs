@@ -12,8 +12,10 @@ import Prelude hiding (sequence)
 import Control.Arrow ((***))
 import Control.Applicative (Applicative (..), (<$>))
 import Control.Monad.Error hiding (sequence)
-import Control.Monad.State (StateT, State, execState, evalState, evalStateT)
-import Control.Monad.RWS (RWS, modify, get, gets, ask, asks, runRWS)
+import Control.Monad.State (StateT, State, execState, evalState, evalStateT
+                           , execStateT)
+import Control.Monad.Reader (Reader, runReader)
+import Control.Monad.RWS (RWS, modify, get, gets, ask, asks, runRWS, put)
 import Data.Conduit (Conduit, awaitForever, yield, (=$=))
 import Data.Foldable (traverse_, foldMap)
 import qualified Data.IntMap as I
@@ -30,13 +32,13 @@ type Typing m = StateT TypeState (ErrorT ConfigError m) (Type, Mu (AST (String, 
 type Registering = State Register (Mu (AST (String, Type)))
 type Phase a m o = Conduit a (ErrorT ConfigError m) o
 
-data Constraint = Equal (Position, Type) (Position, Type)
+data Constraint = Equal (Position, Type) (Position, Type) deriving Show
 
 data TypeState = TypeState { tsTable       :: TypeTable
-                           , tsConstraints :: [Constraint] }
+                           , tsConstraints :: [Constraint] } deriving Show
 
 data Config = Config { cReg     :: Register
-                     , cState   :: TypeState }
+                     , cState   :: TypeState } deriving Show
 
 typeTable :: TypeTable
 typeTable = I.fromList [(stringCode, stringType)
@@ -44,7 +46,7 @@ typeTable = I.fromList [(stringCode, stringType)
                        ,(anyValCode, anyType)]
 
 typecheck :: (Functor m, Monad m) => Phase [Property Ident] m Config
-typecheck = typingPhase =$= withDefaultReg =$= checkingPhase
+typecheck = typingPhase =$= withDefaultReg =$= checkingPhase =$= simplifyPhase
 
 typingPhase :: (Functor m, Monad m)
             => Phase [Property Ident] m ([Property (String, Type)], TypeState)
@@ -69,6 +71,15 @@ checkingPhase = awaitForever go
       let reg2    = execState (traverse register props) reg
           step xs = yield $ Config reg2 state{tsConstraints=xs} in
       lift (checking state) >>= step
+
+simplifyPhase :: (Monad m, Functor m) => Phase Config m Config
+simplifyPhase = awaitForever go
+  where
+    go (Config reg ts) =
+      let tbl    = tsTable ts
+          action = traverse_ simplify (I.toList reg) in
+      do (tbl2, reg2) <- execStateT action (tbl, reg)
+         yield (Config reg2 ts{tsTable=tbl2})
 
 scoping :: Property Ident -> Property String
 scoping (Prop id ast) = Prop key ((para scopingAST ast) (key ++ "."))
@@ -193,18 +204,8 @@ register (Prop (key, typ) ast) =
       registerAST (ASTRING p x)     = return $ string p x
       registerAST (ASUBST p x)      = return $ subst p x
       registerAST (ALIST p xs)      = fmap (list p) (sequence xs)
-      registerAST (AMERGE x y)      = registerMerge x y
+      registerAST (AMERGE x y)      = merge <$> x <*> y
       registerAST (AOBJECT p props) = registerObject p props
-
-registerMerge :: Registering -> Registering -> Registering
-registerMerge x y = go <$> x <*> y
-  where
-    go xtype ytype =
-      case (out xtype, out ytype) of
-        (ALIST p vs, ALIST _ ws)     -> list p (vs ++ ws)
-        (ASTRING p v, ASTRING _ w)   -> string p (v ++  " " ++ w)
-        (AOBJECT p vs, AOBJECT _ ws) -> object p (vs ++ ws)
-        _                            -> merge xtype ytype
 
 registerObject :: Position -> [Prop (String, Type) Registering] -> Registering
 registerObject p props = fmap (object p) (traverse go props)
@@ -213,3 +214,54 @@ registerObject p props = fmap (object p) (traverse go props)
       f >>= \ast ->
         modify (I.insert (hash key) (typ, ast)) >>
         return (Prop (key, typ) ast)
+
+simplify :: (Monad m, Functor m)
+         => (Int, (Type, Value (String, Type)))
+         -> StateT (TypeTable, Register) m ()
+simplify (key, (typ, value)) =
+  get >>= \(table, reg) ->
+    let resolved =
+          maybe False (const True) (runReader (resolveType typ) table) in
+    case () of
+      _ | resolved  ->
+          simplifying key value >>= \(typ2, value2) ->
+            let table2 = I.insert key typ2 table
+                reg2   = I.insert key (typ2, value2) reg in
+            put (table2, reg2)
+        | otherwise -> return ()
+
+simplifying :: (Monad m, Functor m)
+            => Int
+            -> Value (String, Type)
+            -> StateT (TypeTable, Register) m (Type, Value (String, Type))
+simplifying key value = cata simplifyAST value
+  where
+    simplifyAST (ASTRING p s) = return (stringType, string p s)
+    simplifyAST (ALIST p vs)  =
+      sequence vs >>= \xs ->
+        let typ =
+              case () of
+                _ | null xs   -> anyType
+                  | otherwise -> fst $ head xs in
+        return (listTypeOf typ, list p (fmap snd xs))
+    simplifyAST (AMERGE fx fy) = merging <$> fx <*> fy
+    simplifyAST (AOBJECT p xs) =
+      traverse sequence xs >>= \props ->
+        return (objectType, object p (fmap (fmap snd) props))
+    simplifyAST (ASUBST p x) =
+      get >>= \(table, reg) ->
+        let key2 = hash x
+            (Just (_, value2)) = I.lookup key2 reg in
+        simplifying key2 value2 >>= \(typ2, value3) ->
+          let table2 = I.insert key2 typ2 table
+              reg2   = I.insert key2 (typ2, value3) reg in
+          fmap (const (typ2, value3)) (put (table2, reg2))
+
+merging :: (Type, Value (String, Type))
+        -> (Type, Value (String, Type))
+        -> (Type, Value (String, Type))
+merging (tx, vx) (_, vy) =
+  case (vx, vy) of
+    (Mu (ASTRING p xs), Mu (ASTRING _ ys)) -> (tx, string p (xs ++ ys))
+    (Mu (ALIST p xs), Mu (ALIST _ ys))     -> (tx, list p (xs ++ ys))
+    (Mu (AOBJECT p xs), Mu (AOBJECT _ ys)) -> (tx, object p (xs ++ ys))
