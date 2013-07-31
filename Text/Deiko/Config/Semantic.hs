@@ -236,19 +236,25 @@ simplifying :: (Monad m, Functor m)
             -> StateT (TypeTable, Register) m (Type, Value (String, Type))
 simplifying key value = cata simplifyAST value
   where
-    simplifyAST (ASTRING p s) = return (stringType, string p s)
-    simplifyAST (ALIST p vs)  =
+    simplifyAST (ASTRING p s)  = return (stringType, string p s)
+    simplifyAST (ALIST p vs)   = simplifyList p vs
+    simplifyAST (AMERGE fx fy) = merging <$> fx <*> fy
+    simplifyAST (AOBJECT p xs) = simplifyObject p xs
+    simplifyAST (ASUBST p x)   = simplifySubst p x
+
+    simplifyList p vs =
       sequence vs >>= \xs ->
         let typ =
               case () of
                 _ | null xs   -> anyType
                   | otherwise -> fst $ head xs in
         return (listTypeOf typ, list p (fmap snd xs))
-    simplifyAST (AMERGE fx fy) = merging <$> fx <*> fy
-    simplifyAST (AOBJECT p xs) =
+
+    simplifyObject p xs =
       traverse sequence xs >>= \props ->
         return (objectType, object p (fmap (fmap snd) props))
-    simplifyAST (ASUBST p x) =
+
+    simplifySubst p x =
       get >>= \(table, reg) ->
         let key2 = hash x
             (Just (_, value2)) = I.lookup key2 reg in
