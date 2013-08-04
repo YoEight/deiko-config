@@ -1,4 +1,6 @@
-{-# LANGUAGE RankNTypes, ImpredicativeTypes #-}
+{-# LANGUAGE RankNTypes         #-}
+{-# LANGUAGE ImpredicativeTypes #-}
+{-# LANGUAGE OverloadedStrings  #-}
 module Text.Deiko.Config.Parser where
 
 import Control.Monad
@@ -7,180 +9,179 @@ import Control.Monad.Free (Free, wrap)
 import Control.Monad.Free.Church (F, fromF)
 import Data.Conduit
 import Data.Foldable (traverse_, foldMap)
+import Data.Monoid (Monoid, (<>))
+import Data.String (IsString (..))
 import Text.Deiko.Config.Internal
 import Text.Deiko.Config.Util
 
-data LALR a = Shift a
-            | Reduce Production a
-            | LookAhead (Token -> Bool) (Bool -> a)
-            | Failure (Token -> String)
-            | PrintStack -- only when debugging
+data LALR s a = Shift a
+              | Reduce (Production s) a
+              | LookAhead (Token s -> Bool) (Bool -> a)
+              | Failure (Token s -> s)
+              | PrintStack -- only when debugging
 
-data Cell = CToken Position Sym
-          | CAst (Mu (AST Ident))
-          | CIdent Ident
-          | CProp (Property Ident)
-          | CProps [Property Ident]
-          | CEOF deriving Show
+data Cell s = CToken Position (Sym s)
+            | CAst (Value s (Ident s))
+            | CIdent (Ident s)
+            | CProp (Untyped s)
+            | CProps [Untyped s]
+            | CEOF deriving Show
 
-instance Functor LALR where
+instance Functor (LALR s) where
   fmap f (Shift a)       = Shift (f a)
   fmap f (Reduce p a)    = Reduce p (f a)
   fmap f (LookAhead p k) = LookAhead p (f . k)
   fmap _ (Failure e)     = Failure e
   fmap _ PrintStack      = PrintStack
 
-type Stack = [Cell]
+type Stack s = [Cell s]
 
-type Production = Stack -> (Cell, Stack)
+type Production s = Stack s -> (Cell s, Stack s)
 
-type Transformation m =
-  (Stack, Maybe Token) -> Conduit Token (ErrorT ConfigError m) [Property Ident]
-
-identSimple :: Production
+identSimple :: Production s
 identSimple ((CToken p (ID x)):xs) = (CIdent $ Ident p x, xs)
 
-identSelect :: Production
+identSelect :: Production s
 identSelect ((CToken p (ID x)):(CToken _ DOT):(CIdent id):xs) =
   (CIdent $ Select id (Ident p x), xs)
 
-stringP :: Production
+stringP :: Production s
 stringP ((CToken p (STRING x)):xs) = (CAst $ Mu $ ASTRING p x, xs)
 stringP ((CToken p (ID x)):xs)     = (CAst $ Mu $ ASTRING p x, xs)
 
-listP :: Production
+listP :: Production s
 listP ((CToken _ RBRACK):(CToken p LBRACK):xs) = (CAst $ nil p, xs)
 listP ((CToken _ RBRACK):(CAst (Mu (ALIST p values))):xs) =
   (CAst $ list p $ reverse values, xs)
 listP (x@(CToken _ RBRACK):_:xs) = listP (x:xs)
 
-listHead :: Production
+listHead :: Production s
 listHead ((CAst value):(CToken p LBRACK):xs) = (CAst $ Mu $ ALIST p [value], xs)
 listHead ((CAst value):(CToken _ COMMA):(CAst (Mu (ALIST p values))):xs) =
   (CAst $ list p (value:values), xs)
 listHead (x@(CAst value):y@(CToken _ COMMA):_:xs) = listHead (x:y:xs)
 listHead (x@(CAst value):_:xs) = listHead (x:xs)
 
-substP :: Production
+substP :: Production s
 substP ((CToken p (SUBST x)):xs) = (CAst $ subst p x, xs)
 
-mergeP :: Production
+mergeP :: Production s
 mergeP ((CAst y):(CToken _ SPACE):(CAst x):xs) = (CAst $ merge x y, xs)
 mergeP (_:xs) = mergeP xs
 
-objectP :: Production
+objectP :: Production s
 objectP ((CToken _ RBRACE):(CToken p LBRACE):xs) = (CAst $ object p [], xs)
 objectP ((CToken _ RBRACE):(CProps ps):(CToken p LBRACE):xs) =
   (CAst $ object p $ reverse ps, xs)
 objectP (x@(CToken _ RBRACE):y@(CProps _):_:xs) = objectP (x:y:xs)
 objectP (x@(CToken _ RBRACE):_:xs) = objectP (x:xs)
 
-propertyP :: Production
+propertyP :: Production s
 propertyP (x@(CAst _):y@(CIdent _):(CToken _ SPACE):xs) = propertyP (x:y:xs)
 propertyP ((CAst value):(CIdent id):xs) = (CProp $ property id value, xs)
 propertyP (x@(CAst value):_:xs) = propertyP (x:xs)
 propertyP (_:xs) = propertyP xs -- trailling space, ex: id: value_[end]
 
-propertiesHead :: Production
+propertiesHead :: Production s
 propertiesHead ((CProp p):xs) = (CProps [p], xs)
 
-properties :: Production
+properties :: Production s
 properties ((CProp p):(CProps ps):xs)          = (CProps (p:ps), xs)
 properties (x@(CProp _):(CToken _ _):xs)        = properties (x:xs)
 properties ((CToken _ NEWLINE):(CProps ps):xs) = (CProps ps, xs)
 properties (_:xs)                              = properties xs
 
-shift :: F LALR ()
+shift :: F (LALR s) ()
 shift = wrap $ Shift (return ())
 
-reduce :: Production -> F LALR ()
+reduce :: Production s -> F (LALR s) ()
 reduce prod = wrap $ Reduce prod (return ())
 
-lookAhead :: (Token -> Bool) -> F LALR Bool
+lookAhead :: (Token s -> Bool) -> F (LALR s) Bool
 lookAhead p = wrap $ LookAhead p return
 
-printStack :: F LALR a
+printStack :: F (LALR s) a
 printStack = wrap PrintStack
 
-failure :: (Token -> String) -> F LALR a
+failure :: (Token s -> s) -> F (LALR s) a
 failure k = wrap $ Failure k
 
-isId :: Token -> Bool
+isId :: Token s -> Bool
 isId (Elm _ _ (ID _)) = True
 isId _                = False
 
-isDot :: Token -> Bool
+isDot :: Token s -> Bool
 isDot (Elm _ _ DOT) = True
 isDot _             = False
 
-isLBrack :: Token -> Bool
+isLBrack :: Token s -> Bool
 isLBrack (Elm _ _ LBRACK) = True
 isLBrack _                = False
 
-isRBrack :: Token -> Bool
+isRBrack :: Token s -> Bool
 isRBrack (Elm _ _ RBRACK) = True
 isRBrack _                = False
 
-isLBrace :: Token -> Bool
+isLBrace :: Token s -> Bool
 isLBrace (Elm _ _ LBRACE) = True
 isLBrace _                = False
 
-isRBrace :: Token -> Bool
+isRBrace :: Token s -> Bool
 isRBrace (Elm _ _ RBRACE) = True
 isRBrace _                = False
 
-isString :: Token -> Bool
+isString :: Token s -> Bool
 isString (Elm _ _ (STRING _)) = True
 isString _                    = False
 
-isSubst :: Token -> Bool
+isSubst :: Token s -> Bool
 isSubst (Elm _ _ (SUBST _)) = True
 isSubst _                   = False
 
-isComma :: Token -> Bool
+isComma :: Token s -> Bool
 isComma (Elm _ _ COMMA) = True
 isComma _               = False
 
-isSpace :: Token -> Bool
+isSpace :: Token s -> Bool
 isSpace (Elm _ _ SPACE) = True
 isSpace _               = False
 
-isNewline :: Token -> Bool
+isNewline :: Token s -> Bool
 isNewline (Elm _ _ NEWLINE) = True
 isNewline _                 = False
 
-isEqual :: Token -> Bool
+isEqual :: Token s -> Bool
 isEqual (Elm _ _ EQUAL) = True
 isEqual _               = False
 
-isEOF :: Token -> Bool
+isEOF :: Token s -> Bool
 isEOF EOF = True
 isEOF _   = False
 
-anything :: Token -> Bool
+anything :: Token s -> Bool
 anything _ = True
 
-shiftSpace :: F LALR ()
+shiftSpace :: F (LALR s) ()
 shiftSpace =
   alt [(isSpace, shift)
       ,(anything, return ())]
 
-shiftNewline :: F LALR ()
+shiftNewline :: F (LALR s) ()
 shiftNewline =
   alt [(isNewline, shift)
       ,(anything, return ())]
 
-shiftSpaceOrNewline :: F LALR ()
+shiftSpaceOrNewline :: F (LALR s) ()
 shiftSpaceOrNewline = shiftSpace >> shiftNewline
 
-parseId :: F LALR ()
+parseId :: (Monoid s, IsString s, Show s) => F (LALR s) ()
 parseId = do
   shift
   reduce identSimple
   alt [(isDot, parseSelect)
       ,(anything, return ())]
 
-parseSelect :: F LALR ()
+parseSelect :: (Monoid s, IsString s, Show s) => F (LALR s) ()
 parseSelect = do
   shift
   alt [(isId, shift >> go)
@@ -192,10 +193,10 @@ parseSelect = do
         dot <- lookAhead isDot
         when dot parseSelect
 
-parseString :: F LALR ()
+parseString :: F (LALR s) ()
 parseString = shift >> reduce stringP
 
-parseProperty :: F LALR ()
+parseProperty :: (Monoid s, IsString s, Show s) => F (LALR s) ()
 parseProperty = do
   shiftSpace
   alt [(isId, parseId >> go)
@@ -211,7 +212,7 @@ parseProperty = do
 
     step1 = shiftSpace >> parseValue
 
-parseProperties :: F LALR ()
+parseProperties :: (IsString s, Monoid s, Show s) => F (LALR s) ()
 parseProperties = do
   shiftSpaceOrNewline
   parseProperty
@@ -236,7 +237,7 @@ parseProperties = do
       reduce properties
       go
 
-parseObject :: F LALR ()
+parseObject :: (Monoid s, IsString s, Show s) => F (LALR s) ()
 parseObject = do
   shift
   shiftSpaceOrNewline
@@ -248,7 +249,7 @@ parseObject = do
       alt [(isRBrace, shift >> reduce objectP)
           ,(anything, failure unexpected)]
 
-parseList :: F LALR ()
+parseList :: (Monoid s, IsString s, Show s) => F (LALR s) ()
 parseList = do
   shift
   shiftSpaceOrNewline
@@ -262,7 +263,7 @@ parseList = do
       alt [(isRBrack, shift >> reduce listP)
           ,(anything, failure unexpected)]
 
-parseListHead :: F LALR ()
+parseListHead :: (Monoid s, IsString s, Show s) => F (LALR s) ()
 parseListHead = do
   parseValue
   reduce listHead
@@ -277,7 +278,7 @@ parseListHead = do
 
       step = shift >> shiftSpaceOrNewline >> parseValue >> reduce listHead >> go
 
-parseMerge :: F LALR ()
+parseMerge :: (IsString s, Monoid s, Show s) => F (LALR s) ()
 parseMerge = do
   shift
   alt [(isRBrack, return ())
@@ -293,7 +294,7 @@ parseMerge = do
       alt [(isSpace, parseMerge)
           ,(anything, return ())]
 
-parseValue :: F LALR ()
+parseValue :: (Monoid s, IsString s, Show s) => F (LALR s) ()
 parseValue = do
   alt [(isString, parseString)
       ,(isId, parseString)
@@ -304,7 +305,7 @@ parseValue = do
   alt [(isSpace, parseMerge)
       ,(anything, return ())]
 
-alt :: [(Token -> Bool, F LALR ())] -> F LALR ()
+alt :: [(Token s -> Bool, F (LALR s) ())] -> F (LALR s) ()
 alt []               = return ()
 alt ((f, action):xs) = lookAhead f >>= go
   where
@@ -312,16 +313,16 @@ alt ((f, action):xs) = lookAhead f >>= go
       | isF       = action
       | otherwise = alt xs
 
-recv :: Monad m => (Token -> Conduit Token m a) -> Conduit Token m a
+recv :: Monad m => (Token s -> Conduit (Token s) m a) -> Conduit (Token s) m a
 recv k = await >>= \t -> maybe (error "Exhausted source") k t
 
-toCell :: Token -> Cell
+toCell :: Token s -> Cell s
 toCell (Elm l c s) = CToken (l, c) s
 toCell EOF         = CEOF
 
-makeParser :: Monad m
-           => Free LALR ()
-           -> Conduit Token (ErrorT ConfigError m) [Property Ident]
+makeParser :: (Monad m, IsString s, Show s)
+           => Free (LALR s) ()
+           -> Conduit (Token s) (ErrorT (ConfigError s) m) [Untyped s]
 makeParser instr = (cataFree pure impure instr) ([], Nothing)
   where
     pure _ (((CProps xs):_),_) = yield (reverse xs)
@@ -332,33 +333,29 @@ makeParser instr = (cataFree pure impure instr) ([], Nothing)
     impure (Failure k)     = failing k
     impure PrintStack      = reporting
 
-shifting :: Monad m => Transformation m -> Transformation m
-shifting k (stack, ahead) = maybe (recv go) go ahead
-  where
-    go t = k (toCell t:stack, Nothing)
+    shifting k (stack, ahead) = maybe (recv go) go ahead
+      where
+        go t = k (toCell t:stack, Nothing)
 
-reducing :: Production -> Transformation m -> Transformation m
-reducing p k (stack, ahead) =
-  let (prod, stack1) = p stack in k ((prod:stack1), ahead)
+    reducing p k (stack, ahead) =
+      let (prod, stack1) = p stack in k ((prod:stack1), ahead)
 
-looking :: Monad m
-        => (Token -> Bool)
-        -> (Bool -> Transformation m)
-        -> Transformation m
-looking p k (stack, ahead) = maybe (recv go) go ahead
-  where
-    go h = k (p h) (stack, Just h)
+    looking p k (stack, ahead) = maybe (recv go) go ahead
+      where
+        go h = k (p h) (stack, Just h)
 
-failing :: Monad m => (Token -> String) -> Transformation m
-failing k (_, (Just h)) = lift $ throwError (ConfigError $ k h)
+    failing k (_, (Just h)) = lift $ throwError (ConfigError $ k h)
 
-reporting :: Transformation m
-reporting (stack, _) = error $ show stack
+    reporting (stack, _) = error $ show stack
 
-unexpected :: Token -> String
+unexpected :: (IsString s, Monoid s, Show s) => Token s -> s
 unexpected (Elm l c sym) =
-  "Unexpected token " ++ show sym ++ " at (" ++ show l ++ ", " ++ show c ++ ")"
+  "Unexpected token " <> symStr <> " at (" <> line <> ", " <> col <> ")"
+    where
+      symStr = fromString $ show sym
+      line   = fromString $ show l
+      col    = fromString $ show c
 
-parser :: Monad m
-       => Conduit Token (ErrorT ConfigError m) [Property Ident]
+parser :: (Monad m, IsString s, Show s, Monoid s)
+       => Conduit (Token s) (ErrorT (ConfigError s) m) [Untyped s]
 parser = makeParser (fromF parseProperties)

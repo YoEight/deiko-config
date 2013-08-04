@@ -1,22 +1,38 @@
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE FlexibleContexts     #-}
-{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE TypeSynonymInstances   #-}
+{-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE UndecidableInstances   #-}
+{-# LANGUAGE OverloadedStrings      #-}
+{-# LANGUAGE FunctionalDependencies #-}
 module Text.Deiko.Config.Types where
 
 import Control.Monad.Error (MonadError (..))
 import Control.Monad.Reader (MonadReader)
 import Data.Char (isDigit)
+import Data.Hashable
+import Data.Monoid (Monoid, (<>))
+import Data.String (IsString)
 import Text.Deiko.Config.Internal
 import Text.Deiko.Config.Util
 
-class ConfigValue v where
-  configValue :: (MonadReader TypeTable m, MonadError ConfigError m)
-              => String
-              -> Type
-              -> Mu (AST (String, Type))
-              -> m v
+class ( IsString s
+      , Monoid s
+      , Hashable s
+      , MonadReader (TypeTable s) m
+      , MonadError (ConfigError s) m) => ConfigCtx s m
 
-instance ConfigValue String where
+-- class ConfigValue v where
+--   configValue :: ConfigCtx s m
+--               => s
+--               -> Type s
+--               -> Mu (AST s (s, Type s))
+--               -> m v
+
+class ConfigValue p t f m v | p -> v, t -> v, f -> v, m -> v where
+  configValue :: p -> t -> f -> m v
+
+instance (ConfigCtx s m) => ConfigValue s (Type s) (Annoted s) m s where
   configValue key typ value =
     sameType typ stringType >>= \same ->
       case () of
@@ -33,14 +49,14 @@ instance ConfigValue String where
 --          | otherwise     = throwError $ parseError key s "Int"
 --   configValue key typ _ = throwError $ parseTypeError key "Int" typ
 
-propertyNotFound :: String -> ConfigError
-propertyNotFound prop = ConfigError ("Property [" ++ prop ++ "] not found")
+propertyNotFound :: (IsString s, Monoid s) => s -> ConfigError s
+propertyNotFound prop = ConfigError ("Property [" <> prop <> "] not found")
 
-wrongType :: String -> String -> String -> ConfigError
+wrongType :: (IsString s, Monoid s) => s -> s -> s -> ConfigError s
 wrongType key expected found = ConfigError msg
   where
-    msg = "Type error on [" ++ key ++ "]. expected: "
-          ++ expected ++ ", found: " ++ found
+    msg = "Type error on [" <> key <> "]. expected: "
+          <> expected <> ", found: " <> found
 
 -- parseError :: String -> String -> String -> ConfigError
 -- parseError key val typ = ConfigError msg

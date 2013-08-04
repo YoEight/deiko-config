@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Text.Deiko.Config.Lexer (lexer, Token(..), Sym(..)) where
 
 import Control.Arrow ((&&&))
@@ -6,8 +7,9 @@ import Control.Monad.Trans (lift)
 import Control.Monad.State (StateT, evalStateT, modify, gets)
 import Data.Conduit (Conduit, ConduitM, yield, await)
 import Data.ByteString.Char8 (unpack)
-import Data.Foldable (Foldable, traverse_)
 import Data.Char (isLetter, isDigit)
+import Data.Foldable (Foldable, traverse_)
+import Data.String (IsString (..))
 import Text.Deiko.Config.Internal hiding (makeId)
 
 data StringState = None
@@ -19,19 +21,22 @@ data LexerState = LexerState { lexLine  :: Int
                              , lexBrace :: Int
                              , lexBrack :: Int }
 
-type Lexer m a = StateT LexerState (ConduitM Char Token m) a
+type Lexer s m a = StateT LexerState (ConduitM Char (Token s) m) a
 
-lexer :: Monad m => Conduit Char m Token
+lexer :: (Monad m, IsString s) => Conduit Char m (Token s)
 lexer = evalStateT (recv step nop) start
   where
     start = LexerState 1 1 0 0
 
-make :: Monad m => Sym -> Lexer m ()
+make :: Monad m => Sym s -> Lexer s m ()
 make s = do
   (l, c) <- gets (lexLine &&& lexCol)
   lift $ yield (Elm l c s)
 
-recv :: Monad m => (Char -> Lexer m ()) -> Lexer m () -> Lexer m ()
+recv :: (Monad m, IsString s)
+     => (Char -> Lexer s m ())
+     -> Lexer s m ()
+     -> Lexer s m ()
 recv k eof = do
   input <- lift await
   maybe (eof >> end) k input
@@ -42,7 +47,7 @@ recv k eof = do
       when (bk /= 0) unmatchedBracket
       lift $ yield EOF
 
-step :: Monad m => Char -> Lexer m ()
+step :: (Monad m, IsString s) => Char -> Lexer s m ()
 step ' '  = make SPACE    >> incrCol  >> stripSpaces step nop
 step '\n' = make NEWLINE  >> incrLine >> setCol 1 >> stripNewlines step nop
 step '.'  = make DOT      >> incrCol  >> recv step nop
@@ -66,7 +71,7 @@ step x
   | isLetter x = makeId [] x
   | otherwise  = makeStr None [] x
 
-stringStep :: Monad m => Lexer m ()
+stringStep :: (Monad m, IsString s) => Lexer s m ()
 stringStep = recv step1 untermStr
   where
     step1 '"' = recv step2 (make $ STRING "")
@@ -77,16 +82,16 @@ stringStep = recv step1 untermStr
                 incrColBy 2        >>
                 step x
 
-substStep :: Monad m => Lexer m ()
+substStep :: (Monad m, IsString s) => Lexer s m ()
 substStep = recv step1 (incrCol >> (make $ STRING "$"))
   where
     step1 '{' = incrColBy 2 >> recv (makeSubst None []) (make $ STRING "${")
     step1  x  = incrCol >> makeStr None "$" x
 
-nop :: Monad m => Lexer m ()
+nop :: Monad m => Lexer s m ()
 nop = return ()
 
-makeId :: Monad m => String -> Char -> Lexer m ()
+makeId :: (Monad m, IsString s) => String -> Char -> Lexer s m ()
 makeId acc x
   | validIdChar x           = recv (makeId (x:acc)) (produce True)
   | x == ' ' || x == '\n' ||
@@ -97,9 +102,13 @@ makeId acc x
   where
     produce eof =
       let xs = if eof then x:acc else acc in
-      make $ ID $ reverse xs
+      make $ ID $ fromString $ reverse xs
 
-makeStr :: Monad m => StringState -> String -> Char -> Lexer m ()
+makeStr :: (Monad m, IsString s)
+        => StringState
+        -> String
+        -> Char
+        -> Lexer s m ()
 makeStr state acc x
   | x == '\n' = case state of
                   None   -> produce0 >> incrColBy (length acc) >> step x
@@ -144,15 +153,15 @@ makeStr state acc x
 
     produceRaw =
       case state of
-        Raw xs -> make $ STRING str
+        Raw xs -> make $ STRING $ fromString str
           where
             str = foldl go "" (reverse $ fmap (reverse . trim) xs)
             go [] b = b
             go xs b = xs ++ " " ++ b
 
-    produce0     = make $ STRING (reverse acc)
-    produce x    = make $ STRING (reverse (x:acc))
-    produce2 x y = make $ STRING (reverse (y:x:acc))
+    produce0     = make $ STRING $ fromString (reverse acc)
+    produce x    = make $ STRING $ fromString (reverse (x:acc))
+    produce2 x y = make $ STRING $ fromString (reverse (y:x:acc))
 
     decide y
       | y == '{'  =
@@ -162,7 +171,11 @@ makeStr state acc x
           _  -> produce0 >> incrColBy c1 >> recv (makeSubst state []) untermStr
       | otherwise = makeStr state (x:acc) y
 
-makeSubst :: Monad m  => StringState -> String -> Char -> Lexer m ()
+makeSubst :: (Monad m, IsString s)
+          => StringState
+          -> String
+          -> Char
+          -> Lexer s m ()
 makeSubst state acc x =
   case acc of
     [] | isLetter x ||
@@ -183,31 +196,31 @@ makeSubst state acc x =
            None -> recv step nop
            _    -> recv (makeStr state []) untermStr
 
-    string xs = make (STRING ("${" ++ (reverse xs)))
+    string xs = make (STRING $ fromString ("${" ++ (reverse xs)))
 
     produce = do
       (l, c) <- gets (lexLine &&& lexCol)
-      lift $ yield (Elm l (c-2) (SUBST $ reverse acc))
+      lift $ yield (Elm l (c-2) (SUBST $ fromString $ reverse acc))
 
-stripComment :: Monad m => Lexer m ()
+stripComment :: (Monad m, IsString s) => Lexer s m ()
 stripComment = recv go nop
   where
     go '\n' = step '\n'
     go _    = stripComment
 
-stripNewlines :: Monad m
-              => (Char -> Lexer m ()) -- continuation
-              -> Lexer m ()           -- fallback
-              -> Lexer m ()
+stripNewlines :: (Monad m, IsString s)
+              => (Char -> Lexer s m ()) -- continuation
+              -> Lexer s m ()           -- fallback
+              -> Lexer s m ()
 stripNewlines k f = recv go f
   where
     go '\n' = incrLine >> stripNewlines k f
     go x    = setCol 1 >> k x
 
-stripSpaces :: Monad m
-            => (Char -> Lexer m ()) -- continuation
-            -> Lexer m ()           -- fallback
-            -> Lexer m ()
+stripSpaces :: (Monad m, IsString s)
+            => (Char -> Lexer s m ()) -- continuation
+            -> Lexer s m ()           -- fallback
+            -> Lexer s m ()
 stripSpaces k f = recv go f
   where
     go ' ' = incrCol >> stripSpaces k f
@@ -258,11 +271,11 @@ trim xs =
 validIdChar :: Char -> Bool
 validIdChar x = isLetter x || isDigit x || x == '-' || x == '_'
 
-untermStr :: Monad m => Lexer m ()
+untermStr :: (Monad m, IsString s) => Lexer s m ()
 untermStr = make $ ERROR "Unterminated String literal"
 
-unmatchedBrace :: Monad m => Lexer m ()
+unmatchedBrace :: (Monad m, IsString s) => Lexer s m ()
 unmatchedBrace = make $ ERROR "Unmatched brace"
 
-unmatchedBracket :: Monad m => Lexer m ()
+unmatchedBracket :: (Monad m, IsString s) => Lexer s m ()
 unmatchedBracket = make $ ERROR "Unmatched bracket"
