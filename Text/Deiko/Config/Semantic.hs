@@ -41,11 +41,11 @@ data TypeState s = TypeState { tsTable       :: TypeTable s
 data Config s = Config { cReg   :: Register s
                        , cState :: TypeState s } deriving Show
 
-typecheck :: (Functor m, Monad m, IsString s, Hashable s, Monoid s, Eq s)
+typecheck :: (Functor m, Monad m, StringLike s)
           => Phase s [Untyped s] m (Config s)
 typecheck = typingPhase =$= withDefaultReg =$= checkingPhase =$= simplifyPhase
 
-typingPhase :: (Functor m, Monad m, IsString s, Hashable s, Monoid s)
+typingPhase :: (Functor m, Monad m, StringLike s)
             => Phase s [Untyped s] m ([Typed s], TypeState s)
 typingPhase = awaitForever go
   where
@@ -60,7 +60,7 @@ withDefaultReg = awaitForever go
   where
     go (a, b) = yield (a, b, I.empty)
 
-checkingPhase :: (Monad m, IsString s, Hashable s, Monoid s, Eq s)
+checkingPhase :: (Monad m, StringLike s)
               => Phase s ([Typed s], TypeState s, Register s) m (Config s)
 checkingPhase = awaitForever go
   where
@@ -69,7 +69,7 @@ checkingPhase = awaitForever go
           step xs = yield $ Config reg2 state{tsConstraints=xs} in
       lift (checking state) >>= step
 
-simplifyPhase :: (Monad m, Functor m, IsString s, Hashable s, Monoid s)
+simplifyPhase :: (Monad m, Functor m, StringLike s)
               => Phase s (Config s) m (Config s)
 simplifyPhase = awaitForever go
   where
@@ -79,7 +79,7 @@ simplifyPhase = awaitForever go
       do (tbl2, reg2) <- execStateT action (tbl, reg)
          yield (Config reg2 ts{tsTable=tbl2})
 
-scoping :: (IsString s, Monoid s) => Untyped s -> Scoped s
+scoping :: StringLike s => Untyped s -> Scoped s
 scoping (Prop id ast) = Prop key ((para scopingAST ast) (key <> "."))
   where
     key = makeId id
@@ -105,7 +105,7 @@ scoping (Prop id ast) = Prop key ((para scopingAST ast) (key <> "."))
             let key = scope <> makeId id in
             property key (f (key <> "."))
 
-typing :: (Monad m, Functor m, IsString s, Hashable s)
+typing :: (Monad m, Functor m, StringLike s)
        => Scoped s
        -> StateT (TypeState s) (ErrorT (ConfigError s) m) (Typed s)
 typing (Prop key ast) = do
@@ -148,9 +148,7 @@ typing (Prop key ast) = do
           where
             step (Prop key x) = liftM (\(t, ast1) -> (Prop (key, t) ast1)) x
 
-check :: (IsString s, Hashable s, Monoid s)
-      => Constraint s
-      -> RWS (TypeTable s) () [Constraint s] s
+check :: StringLike s => Constraint s -> RWS (TypeTable s) () [Constraint s] s
 check c@(Equal (px, tx) (py, ty)) =
   resolveType tx >>= \rx ->
     resolveType ty >>= \ry ->
@@ -181,7 +179,7 @@ checkFail (px, symx) (py, symy) = do
                         " but having " <> ylabel <>
                         " " <> ypos <> "\n"
 
-checking :: (IsString s, Hashable s, Monoid s, Eq s, Monad m)
+checking :: (StringLike s, Monad m)
          => TypeState s
          -> ErrorT (ConfigError s) m [Constraint s]
 checking (TypeState types constrs) =
@@ -208,7 +206,7 @@ register (Prop (key, typ) ast) =
               modify (I.insert (hash key) (typ, ast)) >>
               return (Prop (key, typ) ast)
 
-simplify :: (Monad m, Functor m, IsString s, Hashable s, Monoid s)
+simplify :: (Monad m, Functor m, StringLike s)
          => (Int, (Type s, Value s (s, Type s)))
          -> StateT (TypeTable s, Register s) m ()
 simplify (key, (typ, value)) =
@@ -223,7 +221,7 @@ simplify (key, (typ, value)) =
             put (table2, reg2)
         | otherwise -> return ()
 
-simplifying :: (Monad m, Functor m, IsString s, Hashable s, Monoid s)
+simplifying :: (Monad m, Functor m, StringLike s)
             => Int
             -> Annoted s
             -> StateT (TypeTable s, Register s) m (Type s, Annoted s)

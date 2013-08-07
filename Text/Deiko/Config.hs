@@ -6,6 +6,7 @@
 {-# LANGUAGE FunctionalDependencies    #-}
 {-# LANGUAGE UndecidableInstances      #-}
 {-# LANGUAGE OverloadedStrings         #-}
+{-# LANGUAGE FlexibleContexts          #-}
 module Text.Deiko.Config where
 
 import Control.Monad.Error
@@ -17,6 +18,7 @@ import Data.Conduit (Conduit, Producer, Sink, Source, ($=), ($$), (=$=), yield
 import Data.Conduit.Binary (sourceFile)
 import Data.ByteString.Char8 (ByteString, unpack)
 import Data.Foldable (traverse_)
+import Data.Functor.Identity (Identity)
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
 import Data.Hashable
@@ -28,6 +30,7 @@ import Text.Deiko.Config.Semantic
 import Text.Deiko.Config.Util (Mu(..), cata)
 import Text.Deiko.Config.Types
 import qualified Text.Deiko.Config.Internal as I
+import Text.Parsec.Prim (Stream)
 
 data CString = CString
 data CList a = CList a
@@ -53,13 +56,58 @@ instance Uni CString
 instance Uni v => Uni (CList v)
 instance Uni CObject
 
--- getValue :: (Monad m, ConfigValue v)
---          => String
---          -> Config
---          -> ErrorT I.ConfigError m v
--- getValue key (Config reg st) = maybe (throwError $ propertyNotFound key) go (IM.lookup (hash key) reg)
---   where
---     go (typ, value) = runReaderT (configValue key typ value) (tsTable st)
+getValueAs :: (I.StringLike s, Monad m)
+           => Conversion s v
+           -> s
+           -> Config s
+           -> ErrorT (I.ConfigError s) m v
+getValueAs k key (Config reg st) =
+  maybe (throwError $ propertyNotFound key) go (IM.lookup (hash key) reg)
+    where
+      go (typ, value) = runReaderT (k key typ value) (tsTable st)
+
+getListOf :: (I.StringLike s, Monad m)
+          => Conversion s v
+          -> s
+          -> Config s
+          -> ErrorT (I.ConfigError s) m [v]
+getListOf k = getValueAs (listValue k)
+
+getString :: (I.StringLike s, Monad m)
+          => s
+          -> Config s
+          -> ErrorT (I.ConfigError s) m s
+getString = getValueAs stringValue
+
+getInt :: (I.StringLike s, Stream s Identity Char, Monad m)
+       => s
+       -> Config s
+       -> ErrorT (I.ConfigError s) m Int
+getInt = getValueAs intValue
+
+getBool :: (I.StringLike s, Stream s Identity Char, Monad m)
+        => s
+        -> Config s
+        -> ErrorT (I.ConfigError s) m Bool
+getBool = getValueAs boolValue
+
+getStrings :: (I.StringLike s, Monad m)
+           => s
+           -> Config s
+           -> ErrorT (I.ConfigError s) m [s]
+getStrings = getListOf stringValue
+
+getInts :: (I.StringLike s, Stream s Identity Char, Monad m)
+        => s
+        -> Config s
+        -> ErrorT (I.ConfigError s) m [Int]
+getInts = getListOf intValue
+
+getBools :: (I.StringLike s, Stream s Identity Char, Monad m)
+         => s
+         -> Config s
+         -> ErrorT (I.ConfigError s) m [Bool]
+getBools = getListOf boolValue
 
 falsePos :: I.Position
 falsePos = (-1, -1)
@@ -90,11 +138,11 @@ bytesToChar = awaitForever (traverse_ yield . unpack)
 sourceString :: Monad m => String -> Producer m Char
 sourceString = traverse_ yield
 
-compile :: (Functor m, Monad m, IsString s, Monoid s, Show s, Hashable s, Eq s)
+compile :: (Functor m, Monad m, I.StringLike s)
         => Conduit Char (ErrorT (I.ConfigError s) m) (Config s)
 compile = lexer =$= parser =$= typecheck
 
-loadFile :: (MonadResource m, IsString s, Monoid s, Show s, Hashable s, Eq s)
+loadFile :: (MonadResource m, I.StringLike s)
          => String
          -> Source (ErrorT (I.ConfigError s) m) (Config s)
 loadFile path = sourceFile path $= bytesToChar =$= compile

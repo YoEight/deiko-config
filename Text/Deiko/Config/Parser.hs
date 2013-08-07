@@ -174,14 +174,14 @@ shiftNewline =
 shiftSpaceOrNewline :: F (LALR s) ()
 shiftSpaceOrNewline = shiftSpace >> shiftNewline
 
-parseId :: (Monoid s, IsString s, Show s) => F (LALR s) ()
+parseId :: StringLike s => F (LALR s) ()
 parseId = do
   shift
   reduce identSimple
   alt [(isDot, parseSelect)
       ,(anything, return ())]
 
-parseSelect :: (Monoid s, IsString s, Show s) => F (LALR s) ()
+parseSelect :: StringLike s => F (LALR s) ()
 parseSelect = do
   shift
   alt [(isId, shift >> go)
@@ -196,7 +196,7 @@ parseSelect = do
 parseString :: F (LALR s) ()
 parseString = shift >> reduce stringP
 
-parseProperty :: (Monoid s, IsString s, Show s) => F (LALR s) ()
+parseProperty :: StringLike s => F (LALR s) ()
 parseProperty = do
   shiftSpace
   alt [(isId, parseId >> go)
@@ -212,7 +212,7 @@ parseProperty = do
 
     step1 = shiftSpace >> parseValue
 
-parseProperties :: (IsString s, Monoid s, Show s) => F (LALR s) ()
+parseProperties :: StringLike s => F (LALR s) ()
 parseProperties = do
   shiftSpaceOrNewline
   parseProperty
@@ -237,7 +237,7 @@ parseProperties = do
       reduce properties
       go
 
-parseObject :: (Monoid s, IsString s, Show s) => F (LALR s) ()
+parseObject :: StringLike s => F (LALR s) ()
 parseObject = do
   shift
   shiftSpaceOrNewline
@@ -249,7 +249,7 @@ parseObject = do
       alt [(isRBrace, shift >> reduce objectP)
           ,(anything, failure unexpected)]
 
-parseList :: (Monoid s, IsString s, Show s) => F (LALR s) ()
+parseList :: StringLike s => F (LALR s) ()
 parseList = do
   shift
   shiftSpaceOrNewline
@@ -263,7 +263,7 @@ parseList = do
       alt [(isRBrack, shift >> reduce listP)
           ,(anything, failure unexpected)]
 
-parseListHead :: (Monoid s, IsString s, Show s) => F (LALR s) ()
+parseListHead :: StringLike s => F (LALR s) ()
 parseListHead = do
   parseValue
   reduce listHead
@@ -278,7 +278,7 @@ parseListHead = do
 
       step = shift >> shiftSpaceOrNewline >> parseValue >> reduce listHead >> go
 
-parseMerge :: (IsString s, Monoid s, Show s) => F (LALR s) ()
+parseMerge :: StringLike s => F (LALR s) ()
 parseMerge = do
   shift
   alt [(isRBrack, return ())
@@ -294,7 +294,7 @@ parseMerge = do
       alt [(isSpace, parseMerge)
           ,(anything, return ())]
 
-parseValue :: (Monoid s, IsString s, Show s) => F (LALR s) ()
+parseValue :: StringLike s => F (LALR s) ()
 parseValue = do
   alt [(isString, parseString)
       ,(isId, parseString)
@@ -356,6 +356,6 @@ unexpected (Elm l c sym) =
       line   = fromString $ show l
       col    = fromString $ show c
 
-parser :: (Monad m, IsString s, Show s, Monoid s)
+parser :: (Monad m, StringLike s)
        => Conduit (Token s) (ErrorT (ConfigError s) m) [Untyped s]
 parser = makeParser (fromF parseProperties)

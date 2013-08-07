@@ -1,19 +1,25 @@
-{-# LANGUAGE RankNTypes          #-}
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes           #-}
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE OverloadedStrings    #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances    #-}
 module Text.Deiko.Config.Internal where
 
 import Control.Monad (liftM)
 import Control.Monad.Error
 import Control.Monad.Reader (MonadReader(..), asks)
 import Control.Applicative (Applicative(..), (<$>))
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (Foldable, foldMap)
 import qualified Data.Map as M
 import qualified Data.IntMap as I
 import Data.Hashable
 import Data.Monoid (Monoid(..), (<>))
 import Data.String (IsString(..))
+import qualified Data.Text as TS
+import qualified Data.Text.Lazy as TL
 import Data.Traversable (Traversable, traverse)
 import Text.Deiko.Config.Util
 
@@ -74,6 +80,8 @@ data TypeS s a = TAny
 
 type Annoted s = Value s (s, Type s)
 
+class (IsString s, Monoid s, Show s, Hashable s, Eq s) => StringLike s
+
 instance Functor (TypeS s) where
   fmap _ TAny      = TAny
   fmap _ TString   = TString
@@ -114,6 +122,18 @@ instance Traversable (AST s i) where
 instance IsString s => Error (ConfigError s) where
   noMsg  = ConfigError "Panic"
   strMsg = ConfigError . fromString
+
+instance StringLike String
+instance StringLike TS.Text
+instance StringLike TL.Text
+instance StringLike BS.ByteString
+instance StringLike BL.ByteString
+
+castType :: TypeS a b -> Type a
+castType TAny     = Mu TAny
+castType TString  = Mu TString
+castType TObject  = Mu TObject
+castType (TRef s) = Mu (TRef s)
 
 string :: IsString s => Position -> s -> Value s a
 string p x = Mu $ ASTRING p x
@@ -158,6 +178,14 @@ sameType x y = do
   rx <- resolveType x
   ry <- resolveType y
   return (rx == ry)
+
+listOf :: Type s -> Maybe (Type s)
+listOf typ = (cata go typ) False
+  where
+    go (TList k) False = k True
+    go (TList k) b     = fmap listTypeOf (k b)
+    go _ False         = Nothing
+    go x _             = Just $ castType x
 
 showType :: (MonadReader (TypeTable s) m, IsString s, Hashable s, Monoid s)
          => Type s
