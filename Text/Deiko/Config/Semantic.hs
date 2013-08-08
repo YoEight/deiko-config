@@ -9,7 +9,7 @@ module Text.Deiko.Config.Semantic
   , Register
   , typecheck
   , showType
-  , manualTypecheck
+  , manualSimplify
   ) where
 
 import Prelude hiding (sequence)
@@ -57,13 +57,11 @@ typingPhase = awaitForever go
           action2 = lift $ evalStateT action (TypeState I.empty []) in
       action2 >>= yield
 
-manualTypecheck :: (MonadError (ConfigError s) m, Functor m, StringLike s)
-                => [Typed s]
-                -> TypeState s
-                -> Register s
-                -> Source m (Config s)
-manualTypecheck xs st reg =
-  yield (xs, st, reg) =$= checkingPhase =$= simplifyPhase
+manualSimplify :: (MonadError (ConfigError s) m, Functor m, StringLike s)
+               => Config s
+               -> Source m (Config s)
+manualSimplify config =
+  yield config =$= simplifyPhase
 
 withDefaultReg :: IsString s => Phase s (a, b) (a, b, Register s)
 withDefaultReg = awaitForever go

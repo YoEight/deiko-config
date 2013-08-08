@@ -1,16 +1,13 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes                #-}
 {-# LANGUAGE ScopedTypeVariables       #-}
-{-# LANGUAGE FlexibleInstances         #-}
-{-# LANGUAGE MultiParamTypeClasses     #-}
-{-# LANGUAGE FunctionalDependencies    #-}
-{-# LANGUAGE UndecidableInstances      #-}
 {-# LANGUAGE OverloadedStrings         #-}
 {-# LANGUAGE FlexibleContexts          #-}
 module Text.Deiko.Config where
 
 import Control.Monad.Error
 import Control.Monad.Reader (MonadReader, ReaderT (..))
+import Control.Monad.State (get, put, execState)
 import Control.Monad.Trans (MonadIO (..), lift)
 import Control.Monad.Trans.Resource (MonadResource)
 import Data.Conduit (Conduit, Producer, Sink, Source, ($=), ($$), (=$=), yield
@@ -22,7 +19,7 @@ import Data.Functor.Identity (Identity)
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
 import Data.Hashable
-import Data.Monoid (Monoid)
+import Data.Monoid (Monoid, (<>))
 import Data.String (IsString (..))
 import Text.Deiko.Config.Lexer (lexer)
 import Text.Deiko.Config.Parser (parser)
@@ -36,7 +33,7 @@ data CString = CString
 data CList a = CList a
 data CObject = CObject
 data Val s a b = Val (I.Value s b)
-data Pair s = forall t. TypeOf t => Pair s (Val s t (s, Type s))
+data Pair s = forall t. TypeOf t => s := (Val s t (s, Type s))
 
 class TypeOf t where
   typeof :: IsString s => Val s t a -> Type s
@@ -57,13 +54,20 @@ getValueWithAs :: (I.StringLike s, Monad m, Functor m)
                -> Config s
                -> ErrorT (I.ConfigError s) m v
 getValueWithAs k [] key config = getValueAs k key config
-getValueWithAs k xs key (Config reg st) =
+getValueWithAs k xs key config =
   process $$ (await >>= (lift . getValueAs k key . unJust))
   where
     unJust (Just x) = x
-    toProp (Pair key v@(Val value)) = I.Prop (key, typeof v) value
+    toProp (key := v@(Val value)) = (hash key, (typeof v, value))
     props   = fmap toProp xs
-    process = manualTypecheck props st reg
+    go (hash, tup) =
+      get >>= \(Config reg (TypeState tb cs)) ->
+        let reg1 = IM.insertWith (flip const) hash tup reg
+            tb1  = IM.insertWith (flip const) hash (fst tup) tb in
+        put (Config reg1 (TypeState tb1 cs))
+    process =
+      let config1 = execState (traverse_ go props) config in
+      manualSimplify config1
 
 getValueAs :: (I.StringLike s, Monad m)
            => Conversion s v
@@ -154,13 +158,10 @@ nil = Val $ I.nil falsePos
 merge :: Val s a b -> Val s a b -> Val s a b
 merge (Val x) (Val y) = Val $ I.merge x y
 
-prop :: (TypeOf t, IsString s) => s -> Val s t (s, Type s) -> Pair s
-prop name value = Pair name value
-
 object :: IsString s => [Pair s] -> Val s CObject (s, Type s)
 object = Val . I.object falsePos . fmap go
   where
-    go (Pair name v@(Val value)) = I.property (name, typeof v) value
+    go (name := v@(Val value)) = I.property (name, typeof v) value
 
 bytesToChar :: Monad m => Conduit ByteString m Char
 bytesToChar = awaitForever (traverse_ yield . unpack)

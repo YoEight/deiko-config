@@ -1,5 +1,4 @@
 {-# LANGUAGE RankNTypes         #-}
-{-# LANGUAGE ImpredicativeTypes #-}
 {-# LANGUAGE OverloadedStrings  #-}
 module Text.Deiko.Config.Parser where
 

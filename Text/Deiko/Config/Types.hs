@@ -1,12 +1,8 @@
-{-# LANGUAGE TypeSynonymInstances   #-}
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
-{-# LANGUAGE UndecidableInstances   #-}
 {-# LANGUAGE OverloadedStrings      #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE GADTs                  #-}
-{-# LANGUAGE RankNTypes                #-}
+{-# LANGUAGE RankNTypes             #-}
 module Text.Deiko.Config.Types where
 
 import Control.Applicative (WrappedMonad (..), (<*), (*>), (<*>), (<$>))
@@ -40,10 +36,13 @@ stringValue :: StringLike s => Conversion s s
 stringValue key typ value =
   sameType typ stringType >>= \same ->
     case () of
-      _ | same      -> cata (\(ASTRING _ s) -> return s) value
+      _ | same      -> cata go value
         | otherwise ->
           showType typ >>= \typStr ->
           throwError $ wrongType key "String" typStr
+  where
+    go (ASTRING _ s) = return s
+    go (ASUBST _ s)  = throwError (unresolved key s "String")
 
 intParsec :: (StringLike s, Stream s Identity Char) => Parsec s () Int
 intParsec = fmap read (many1 digit <* eof)
@@ -96,6 +95,7 @@ listValue k key typ value = maybe onError ((flip go) value) (listOf typ)
           handler (ConfigError e) =
             showType typ >>= (throwError . ConfigError . ctx e) in
       catchError action handler
+    go typ (Mu (ASUBST _ s)) = throwError (unresolved key s "List")
 
 propertyNotFound :: (IsString s, Monoid s) => s -> ConfigError s
 propertyNotFound prop = ConfigError ("Property [" <> prop <> "] not found")
@@ -105,6 +105,12 @@ wrongType key expected found = ConfigError msg
   where
     msg = "Type error on [" <> key <> "] when getting value. expected: "
           <> expected <> ", found: " <> found
+
+unresolved :: (IsString s, Monoid s) => s -> s -> s -> ConfigError s
+unresolved key subst typ = ConfigError msg
+  where
+    msg = "Can't make a " <> typ <> " for [" <> key <> "] because [" <>
+          subst <> "] is unresolved"
 
 -- parseError :: String -> String -> String -> ConfigError
 -- parseError key val typ = ConfigError msg
