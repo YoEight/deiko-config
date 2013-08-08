@@ -19,9 +19,12 @@ library
     exposed-modules:
         Text.Deiko.Config
     other-modules:
+        Text.Deiko.Config.Core
         Text.Deiko.Config.Lexer
         Text.Deiko.Config.Parser
         Text.Deiko.Config.Semantic
+        Text.Deiko.Config.Types
+        Text.Deiko.Config.Util
     build-depends:       base ==4.6.*
                          ,array ==0.4.*
                          ,containers ==0.5.*
