@@ -2,9 +2,7 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE RankNTypes        #-}
 module Text.Deiko.Config.Semantic
-  (
-    Type(..)
-  , Config(..)
+  ( Config(..)
   , TypeState(..)
   , Register
   , typecheck

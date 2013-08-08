@@ -111,16 +111,3 @@ unresolved key subst typ = ConfigError msg
   where
     msg = "Can't make a " <> typ <> " for [" <> key <> "] because [" <>
           subst <> "] is unresolved"
-
--- parseError :: String -> String -> String -> ConfigError
--- parseError key val typ = ConfigError msg
---   where
---     msg = "Can't parse a " ++ typ ++ " for [" ++ key ++ "] with value ["
---           ++ val ++ "]"
-
--- parseTypeError :: String -> String -> Type -> ConfigError
--- parseTypeError key expected found = ConfigError msg
---   where
---     fouStr = showType found
---     msg = "Can't parse a " ++ expected ++ " with a value of type " ++ fouStr
---           ++ " for [" ++ key ++ "]"
