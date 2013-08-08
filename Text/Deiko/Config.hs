@@ -11,7 +11,7 @@ module Text.Deiko.Config where
 
 import Control.Monad.Error
 import Control.Monad.Reader (MonadReader, ReaderT (..))
-import Control.Monad.Trans (MonadIO (..))
+import Control.Monad.Trans (MonadIO (..), lift)
 import Control.Monad.Trans.Resource (MonadResource)
 import Data.Conduit (Conduit, Producer, Sink, Source, ($=), ($$), (=$=), yield
                     ,awaitForever, runResourceT, ResourceT, await)
@@ -38,8 +38,6 @@ data CObject = CObject
 data Val s a b = Val (I.Value s b)
 data Pair s = forall t. TypeOf t => Pair s (Val s t (s, Type s))
 
-class Uni v
-
 class TypeOf t where
   typeof :: IsString s => Val s t a -> Type s
 
@@ -52,9 +50,20 @@ instance TypeOf CObject where
 instance TypeOf t => TypeOf (CList t) where
   typeof _ = I.listTypeOf (typeof (undefined :: IsString s => Val s t a))
 
-instance Uni CString
-instance Uni v => Uni (CList v)
-instance Uni CObject
+getValueWithAs :: (I.StringLike s, Monad m, Functor m)
+               => Conversion s v
+               -> [Pair s]
+               -> s
+               -> Config s
+               -> ErrorT (I.ConfigError s) m v
+getValueWithAs k [] key config = getValueAs k key config
+getValueWithAs k xs key (Config reg st) =
+  process $$ (await >>= (lift . getValueAs k key . unJust))
+  where
+    unJust (Just x) = x
+    toProp (Pair key v@(Val value)) = I.Prop (key, typeof v) value
+    props   = fmap toProp xs
+    process = manualTypecheck props st reg
 
 getValueAs :: (I.StringLike s, Monad m)
            => Conversion s v
@@ -108,6 +117,27 @@ getBools :: (I.StringLike s, Stream s Identity Char, Monad m)
          -> Config s
          -> ErrorT (I.ConfigError s) m [Bool]
 getBools = getListOf boolValue
+
+getStringWith :: (I.StringLike s, Monad m, Functor m)
+              => [Pair s]
+              -> s
+              -> Config s
+              -> ErrorT (I.ConfigError s) m s
+getStringWith = getValueWithAs stringValue
+
+getIntWith :: (I.StringLike s, Stream s Identity Char, Monad m, Functor m)
+              => [Pair s]
+              -> s
+              -> Config s
+              -> ErrorT (I.ConfigError s) m Int
+getIntWith = getValueWithAs intValue
+
+getBoolWith :: (I.StringLike s, Stream s Identity Char, Monad m, Functor m)
+            => [Pair s]
+            -> s
+            -> Config s
+            -> ErrorT (I.ConfigError s) m Bool
+getBoolWith = getValueWithAs boolValue
 
 falsePos :: I.Position
 falsePos = (-1, -1)

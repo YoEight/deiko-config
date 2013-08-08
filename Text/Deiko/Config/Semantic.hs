@@ -1,4 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE RankNTypes        #-}
 module Text.Deiko.Config.Semantic
   (
     Type(..)
@@ -7,6 +9,7 @@ module Text.Deiko.Config.Semantic
   , Register
   , typecheck
   , showType
+  , manualTypecheck
   ) where
 
 import Prelude hiding (sequence)
@@ -17,7 +20,7 @@ import Control.Monad.State (StateT, State, execState, evalState, evalStateT
                            , execStateT)
 import Control.Monad.Reader (Reader, runReader)
 import Control.Monad.RWS (RWS, modify, get, gets, ask, asks, runRWS, put)
-import Data.Conduit (Conduit, awaitForever, yield, (=$=))
+import Data.Conduit (Conduit, Source, awaitForever, yield, (=$=))
 import Data.Foldable (traverse_, foldMap)
 import qualified Data.IntMap as I
 import Data.Hashable
@@ -31,7 +34,8 @@ import Text.Deiko.Config.Internal
 
 type Scoping s = s -> Value s s
 type Registering s = State (Register s) (Annoted s)
-type Phase s a m o = Conduit a (ErrorT (ConfigError s) m) o
+type Phase s a o =
+  forall m. (Functor m, MonadError (ConfigError s) m) => Conduit a m o
 
 data Constraint s = Equal (Position, Type s) (Position, Type s) deriving Show
 
@@ -41,12 +45,10 @@ data TypeState s = TypeState { tsTable       :: TypeTable s
 data Config s = Config { cReg   :: Register s
                        , cState :: TypeState s } deriving Show
 
-typecheck :: (Functor m, Monad m, StringLike s)
-          => Phase s [Untyped s] m (Config s)
+typecheck :: StringLike s => Phase s [Untyped s] (Config s)
 typecheck = typingPhase =$= withDefaultReg =$= checkingPhase =$= simplifyPhase
 
-typingPhase :: (Functor m, Monad m, StringLike s)
-            => Phase s [Untyped s] m ([Typed s], TypeState s)
+typingPhase :: StringLike s => Phase s [Untyped s] ([Typed s], TypeState s)
 typingPhase = awaitForever go
   where
     go props =
@@ -55,13 +57,21 @@ typingPhase = awaitForever go
           action2 = lift $ evalStateT action (TypeState I.empty []) in
       action2 >>= yield
 
-withDefaultReg :: (Monad m, IsString s) => Phase s (a, b) m (a, b, Register s)
+manualTypecheck :: (MonadError (ConfigError s) m, Functor m, StringLike s)
+                => [Typed s]
+                -> TypeState s
+                -> Register s
+                -> Source m (Config s)
+manualTypecheck xs st reg =
+  yield (xs, st, reg) =$= checkingPhase =$= simplifyPhase
+
+withDefaultReg :: IsString s => Phase s (a, b) (a, b, Register s)
 withDefaultReg = awaitForever go
   where
     go (a, b) = yield (a, b, I.empty)
 
-checkingPhase :: (Monad m, StringLike s)
-              => Phase s ([Typed s], TypeState s, Register s) m (Config s)
+checkingPhase :: StringLike s
+              => Phase s ([Typed s], TypeState s, Register s) (Config s)
 checkingPhase = awaitForever go
   where
     go (props, state, reg) =
@@ -69,8 +79,7 @@ checkingPhase = awaitForever go
           step xs = yield $ Config reg2 state{tsConstraints=xs} in
       lift (checking state) >>= step
 
-simplifyPhase :: (Monad m, Functor m, StringLike s)
-              => Phase s (Config s) m (Config s)
+simplifyPhase :: StringLike s => Phase s (Config s) (Config s)
 simplifyPhase = awaitForever go
   where
     go (Config reg ts) =
@@ -105,9 +114,9 @@ scoping (Prop id ast) = Prop key ((para scopingAST ast) (key <> "."))
             let key = scope <> makeId id in
             property key (f (key <> "."))
 
-typing :: (Monad m, Functor m, StringLike s)
+typing :: (MonadError (ConfigError s) m, Functor m, StringLike s)
        => Scoped s
-       -> StateT (TypeState s) (ErrorT (ConfigError s) m) (Typed s)
+       -> StateT (TypeState s) m (Typed s)
 typing (Prop key ast) = do
   (t, ast1) <- cata typingAST ast
   modify (types t)
@@ -179,9 +188,9 @@ checkFail (px, symx) (py, symy) = do
                         " but having " <> ylabel <>
                         " " <> ypos <> "\n"
 
-checking :: (StringLike s, Monad m)
+checking :: (StringLike s, MonadError (ConfigError s) m)
          => TypeState s
-         -> ErrorT (ConfigError s) m [Constraint s]
+         -> m [Constraint s]
 checking (TypeState types constrs) =
   let action          = fmap mconcat (traverse check constrs)
       (msg, unres, _) = runRWS action types []
