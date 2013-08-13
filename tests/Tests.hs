@@ -5,6 +5,6 @@ import Text.Deiko.Config
 
 main = either handler go =<< runErrorT action
   where
-    handler = putStrLn . configMsg
+    handler = error . configMsg
     go _    = putStrLn "Config loaded"
     action  = loadFile "tests/resources/app.conf"
