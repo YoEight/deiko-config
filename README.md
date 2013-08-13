@@ -41,23 +41,31 @@ nested {
 
 More information about the format can be found on [Typesafe-config project page](https://github.com/typesafehub/config)
 
-##Installation
+##Example
 
-You need 2 tools named Alex and Happy (like Lex and Yacc but written in Haskell). 
+```haskell
+import Control.Monad.Trans (liftIO)
+import Control.Monad.Error (runErrorT)
+import Text.Deiko.Config
+
+data Foo = Foo { fooPort :: Int, fooAddr :: String }
+
+main = do
+  res <- runErrorT loadFooProps
+  either (error . configMsg) handle res
+ 
+  where
+    loadFooProps = do
+      config <- loadFile "conf/app.conf"
+      port   <- getInt "foo.port" config
+      addr   <- getString "foo.addr" config
+      liftIO $ makeSomethingUseful (Foo port addr)
+      
+makeSomethingUseful :: Foo -> IO Bar
+makeSomethingUseful = ...
+
+handleBar :: Bar -> IO ()
+handleBar = ...
 
 ```
-$ cabal update
-$ cabal install alex
-$ cabal install happy
-```
 
-Then
-
-```
-# In project's home directory
-
-$ alex Text/Deiko/Config/Lexer.x
-$ happy Text/Deiko/Config/Parser.y
-$ cabal-dev configure
-$ cabal-dev install
-```
