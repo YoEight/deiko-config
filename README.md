@@ -39,7 +39,31 @@ nested {
 }
 ```
 
-More information about the format can be found on [Typesafe-config project page](https://github.com/typesafehub/config)
+More information about the format can be found on [Typesafe-config project page](https://github.com/typesafehub/config).
+
+The library provides good error messages and comes with a bottom-up type inferencer in order to catch more configuration errors.
+
+Here some use-cases:
+
+1) `foo = ["bar", { baz : 42 }]`
+
+You'll have:
+
+```
+Expected String (line: 1, col: 8) but having Object (line: 1, col: 15)
+```
+
+reason: List has only one inner type
+
+2) `foo = ["bar"] [{ baz : 42 }]`
+
+You'll have:
+
+```
+Expected List[String] (line: 1, col: 7) but having List[Object] (line: 1, col: 15)
+```
+
+reason: You can't merge Lists of different types
 
 ##Example
 
