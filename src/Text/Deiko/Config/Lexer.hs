@@ -114,6 +114,9 @@ makeStr state acc x
                   None   -> produce0 >> incrColBy (length acc) >> step x
                   Simple -> err
                   Raw xs -> recv (makeStr (Raw (acc:xs)) []) untermStr
+  | x == ' '  = case state of
+                  None   -> produce0 >> incrColBy (length acc) >> step x
+                  _      -> recv (makeStr state (x:acc)) untermStr
   | x == '$'  = case state of
                   None -> recv decide (produce x)
                   _    -> recv decide untermStr

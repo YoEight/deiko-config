@@ -7,8 +7,10 @@ module Text.Deiko.Config
   , sourceString
   , compile
   , loadFile
+  , printFileTokens
   ) where
 
+import Control.Monad.Trans (MonadIO (..))
 import Control.Monad.Error (ErrorT, mapErrorT)
 import Data.Conduit (Conduit, Sink, Source, Producer, ($=), ($$), (=$=), yield
                     ,await, awaitForever, runResourceT, ResourceT)
@@ -39,5 +41,12 @@ loadFile path =
   where
     go (Just x) = return x
 
+printFileTokens :: StringLike s => String -> ErrorT (ConfigError s) IO ()
+printFileTokens path = mapErrorT runResourceT
+                  (sourceFile path $= bytesToChar =$= lexer $$ printOut)
+
 configMsg :: ConfigError s -> s
 configMsg (ConfigError s) = s
+
+printOut :: (MonadIO m, Show a) => Sink a m ()
+printOut = awaitForever (liftIO . print)
