@@ -7,8 +7,8 @@ import Control.Monad (liftM)
 import Control.Monad.Error
 import Control.Monad.Reader (MonadReader(..), asks)
 import Control.Applicative (Applicative(..), (<$>))
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Foldable (Foldable, foldMap)
 import qualified Data.Map as M
 import qualified Data.IntMap as I
