@@ -1,5 +1,7 @@
 Small configuration library written in Haskell
 
+[![Build Status](https://travis-ci.org/YoEight/deiko-config.png?branch=master)](https://travis-ci.org/YoEight/deiko-config)
+
 ##Overview
 
 Uses [Typesafe-config](https://github.com/typesafehub/config)'s format: HOCON
