@@ -76,7 +76,7 @@ data Foo = Foo { fooPort :: Int, fooAddr :: String }
 
 main = do
   res <- runErrorT loadFooProps
-  either (error . configMsg) handle res
+  either (error . configMsg) handleBar res
  
   where
     loadFooProps = do
