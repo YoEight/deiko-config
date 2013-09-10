@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings  #-}
 module Text.Deiko.Config.Parser where
 
+import Control.Applicative ((<*>), (<$>))
 import Control.Monad
 import Control.Monad.Error
 import Control.Monad.Free (Free, wrap)
@@ -13,339 +14,207 @@ import Data.String (IsString (..))
 import Text.Deiko.Config.Internal
 import Text.Deiko.Config.Util
 
-data LALR s a = Shift a
-              | Reduce (Production s) a
-              | LookAhead (Token s -> Bool) (Bool -> a)
-              | Failure (Token s -> s)
-              | PrintStack -- only when debugging
-
-data Cell s = CToken Position (Sym s)
-            | CAst (Value s (Ident s))
-            | CIdent (Ident s)
-            | CProp (Untyped s)
-            | CProps [Untyped s]
-            | CEOF deriving Show
+data LALR s a = Shift (Token s -> a)
+              | LookAhead (Token s -> a)
+              | Failure s
 
 instance Functor (LALR s) where
-  fmap f (Shift a)       = Shift (f a)
-  fmap f (Reduce p a)    = Reduce p (f a)
-  fmap f (LookAhead p k) = LookAhead p (f . k)
-  fmap _ (Failure e)     = Failure e
-  fmap _ PrintStack      = PrintStack
+  fmap f (Shift k)     = Shift (f . k)
+  fmap f (LookAhead k) = LookAhead (f . k)
+  fmap _ (Failure e)   = Failure e
 
-type Stack s = [Cell s]
+shift :: F (LALR s) (Token s)
+shift = wrap $ Shift return
 
-type Production s = Stack s -> (Cell s, Stack s)
+shift_ :: F (LALR s) ()
+shift_ = void shift
 
-identSimple :: Production s
-identSimple ((CToken p (ID x)):xs) = (CIdent $ Ident p x, xs)
+lookAhead :: F (LALR s) (Token s)
+lookAhead = wrap $ LookAhead return
 
-identSelect :: Production s
-identSelect ((CToken p (ID x)):(CToken _ DOT):(CIdent id):xs) =
-  (CIdent $ Select id (Ident p x), xs)
+failure :: s -> F (LALR s) a
+failure e = wrap $ Failure e
 
-stringP :: Production s
-stringP ((CToken p (STRING x)):xs) = (CAst $ Mu $ ASTRING p x, xs)
-stringP ((CToken p (ID x)):xs)     = (CAst $ Mu $ ASTRING p x, xs)
+withLook :: (Token s -> F (LALR s) a) -> F (LALR s) a
+withLook k = lookAhead >>= k
 
-listP :: Production s
-listP ((CToken _ RBRACK):(CToken p LBRACK):xs) = (CAst $ nil p, xs)
-listP ((CToken _ RBRACK):(CAst (Mu (ALIST p values))):xs) =
-  (CAst $ list p $ reverse values, xs)
-listP (x@(CToken _ RBRACK):_:xs) = listP (x:xs)
-
-listHead :: Production s
-listHead ((CAst value):(CToken p LBRACK):xs) = (CAst $ Mu $ ALIST p [value], xs)
-listHead ((CAst value):(CToken _ COMMA):(CAst (Mu (ALIST p values))):xs) =
-  (CAst $ list p (value:values), xs)
-listHead (x@(CAst value):y@(CToken _ COMMA):_:xs) = listHead (x:y:xs)
-listHead (x@(CAst value):_:xs) = listHead (x:xs)
-
-substP :: Production s
-substP ((CToken p (SUBST x)):xs) = (CAst $ subst p x, xs)
-
-mergeP :: Production s
-mergeP ((CAst y):(CToken _ SPACE):(CAst x):xs) = (CAst $ merge x y, xs)
-mergeP (_:xs) = mergeP xs
-
-objectP :: Production s
-objectP ((CToken _ RBRACE):(CToken p LBRACE):xs) = (CAst $ object p [], xs)
-objectP ((CToken _ RBRACE):(CProps ps):(CToken p LBRACE):xs) =
-  (CAst $ object p $ reverse ps, xs)
-objectP (x@(CToken _ RBRACE):y@(CProps _):_:xs) = objectP (x:y:xs)
-objectP (x@(CToken _ RBRACE):_:xs) = objectP (x:xs)
-
-propertyP :: Production s
-propertyP (x@(CAst _):y@(CIdent _):(CToken _ SPACE):xs) = propertyP (x:y:xs)
-propertyP ((CAst value):(CIdent id):xs) = (CProp $ property id value, xs)
-propertyP (x@(CAst value):_:xs) = propertyP (x:xs)
-propertyP (_:xs) = propertyP xs -- trailling space, ex: id: value_[end]
-
-propertiesHead :: Production s
-propertiesHead ((CProp p):xs) = (CProps [p], xs)
-
-properties :: Production s
-properties ((CProp p):(CProps ps):xs)          = (CProps (p:ps), xs)
-properties (x@(CProp _):(CToken _ _):xs)        = properties (x:xs)
-properties ((CToken _ NEWLINE):(CProps ps):xs) = (CProps ps, xs)
-properties (_:xs)                              = properties xs
-
-shift :: F (LALR s) ()
-shift = wrap $ Shift (return ())
-
-reduce :: Production s -> F (LALR s) ()
-reduce prod = wrap $ Reduce prod (return ())
-
-lookAhead :: (Token s -> Bool) -> F (LALR s) Bool
-lookAhead p = wrap $ LookAhead p return
-
-printStack :: F (LALR s) a
-printStack = wrap PrintStack
-
-failure :: (Token s -> s) -> F (LALR s) a
-failure k = wrap $ Failure k
-
-isId :: Token s -> Bool
-isId (Elm _ _ (ID _)) = True
-isId _                = False
-
-isDot :: Token s -> Bool
-isDot (Elm _ _ DOT) = True
-isDot _             = False
-
-isLBrack :: Token s -> Bool
-isLBrack (Elm _ _ LBRACK) = True
-isLBrack _                = False
-
-isRBrack :: Token s -> Bool
-isRBrack (Elm _ _ RBRACK) = True
-isRBrack _                = False
-
-isLBrace :: Token s -> Bool
-isLBrace (Elm _ _ LBRACE) = True
-isLBrace _                = False
-
-isRBrace :: Token s -> Bool
-isRBrace (Elm _ _ RBRACE) = True
-isRBrace _                = False
-
-isString :: Token s -> Bool
-isString (Elm _ _ (STRING _)) = True
-isString _                    = False
-
-isSubst :: Token s -> Bool
-isSubst (Elm _ _ (SUBST _)) = True
-isSubst _                   = False
-
-isComma :: Token s -> Bool
-isComma (Elm _ _ COMMA) = True
-isComma _               = False
-
-isSpace :: Token s -> Bool
-isSpace (Elm _ _ SPACE) = True
-isSpace _               = False
-
-isNewline :: Token s -> Bool
-isNewline (Elm _ _ NEWLINE) = True
-isNewline _                 = False
-
-isEqual :: Token s -> Bool
-isEqual (Elm _ _ EQUAL) = True
-isEqual _               = False
-
-isEOF :: Token s -> Bool
-isEOF EOF = True
-isEOF _   = False
-
-anything :: Token s -> Bool
-anything _ = True
+withShift :: (Token s -> F (LALR s) a) -> F (LALR s) a
+withShift k = shift >>= k
 
 shiftSpace :: F (LALR s) ()
-shiftSpace =
-  alt [(isSpace, shift)
-      ,(anything, return ())]
+shiftSpace = withLook go
+  where
+    go (Elm _ _ SPACE) = shift_
+    go _              = return ()
 
 shiftNewline :: F (LALR s) ()
-shiftNewline =
-  alt [(isNewline, shift)
-      ,(anything, return ())]
+shiftNewline = withLook go
+  where
+    go (Elm _ _ NEWLINE) = shift_
+    go _                 = return ()
 
 shiftSpaceOrNewline :: F (LALR s) ()
 shiftSpaceOrNewline = shiftSpace >> shiftNewline
 
-parseId :: StringLike s => F (LALR s) ()
+parseId :: StringLike s => F (LALR s) (Ident s)
 parseId = do
-  shift
-  reduce identSimple
-  alt [(isDot, parseSelect)
-      ,(anything, return ())]
+  t <- shift
+  case t of
+    (Elm l c (ID s))     -> return (Ident (l,c) s)
+    (Elm l c (STRING s)) -> return (Ident (l,c) s)
+    _                    -> failure (unexpected t)
 
-parseSelect :: StringLike s => F (LALR s) ()
+parseSelect :: StringLike s => F (LALR s) (Ident s)
 parseSelect = do
-  shift
-  alt [(isId, shift >> go)
-      ,(anything, failure unexpected)]
-
+  id <- parseId
+  loop id
     where
-      go = do
-        reduce identSelect
-        dot <- lookAhead isDot
-        when dot parseSelect
+      loop id = do
+        t <- lookAhead
+        case t of
+          (Elm _ _ DOT) -> shift_ >> fmap (Select id) parseSelect
+          _             -> return id
 
-parseString :: F (LALR s) ()
-parseString = shift >> reduce stringP
+parseString :: F (LALR s) (Value s (Ident s))
+parseString = do
+  t <- shift
+  case t of
+    (Elm l c (ID s))     -> return $ Mu $ ASTRING (l,c) s
+    (Elm l c (STRING s)) -> return $ Mu $ ASTRING (l,c) s
 
-parseProperty :: StringLike s => F (LALR s) ()
+parseProperty :: StringLike s => F (LALR s) (Untyped s)
 parseProperty = do
   shiftSpace
-  alt [(isId, parseId >> go)
-      ,(anything, failure unexpected)]
-
+  id <- parseSelect
+  shiftSpace
+  t <- lookAhead
+  case t of
+    (Elm _ _ EQUAL)  -> onEqual id
+    (Elm _ _ LBRACE) -> fmap (Prop id) parseObject
+    _                -> failure (unexpected t)
   where
-    go = do
+    onEqual id = do
+      shift
       shiftSpace
-      alt [(isEqual, shift >> step1)
-          ,(isLBrace, parseObject)
-          ,(anything, failure unexpected)]
-      reduce propertyP
+      v <- parseValue
+      return $ Prop id v
 
-    step1 = shiftSpace >> parseValue
-
-parseProperties :: StringLike s => F (LALR s) ()
+parseProperties :: StringLike s => F (LALR s) [Untyped s]
 parseProperties = do
   shiftSpaceOrNewline
-  parseProperty
-  reduce propertiesHead
+  prop <- parseProperty
   shiftSpace
-  go
-
-  where
-    go =
-      alt [(isComma, reduction)
-          ,(isNewline, shift >> inter)
-          ,(anything, return ())]
-
-    inter = do
-      shiftSpaceOrNewline
-      alt [(isEOF, reduce properties)
-          ,(isRBrace, reduce properties)
-          ,(anything, reduction)]
-
-    reduction = do
-      parseProperty
-      reduce properties
-      go
-
-parseObject :: StringLike s => F (LALR s) ()
-parseObject = do
-  shift
-  shiftSpaceOrNewline
-  alt [(isRBrace, shift >> reduce objectP)
-      ,(anything, parseProperties >> end)]
-
-  where
-    end =
-      alt [(isRBrace, shift >> reduce objectP)
-          ,(anything, failure unexpected)]
-
-parseList :: StringLike s => F (LALR s) ()
-parseList = do
-  shift
-  shiftSpaceOrNewline
-  alt [(isRBrack, shift >> reduce listP)
-      ,(anything, go)]
-
-  where
-    go = do
-      parseListHead
-      shiftSpaceOrNewline
-      alt [(isRBrack, shift >> reduce listP)
-          ,(anything, failure unexpected)]
-
-parseListHead :: StringLike s => F (LALR s) ()
-parseListHead = do
-  parseValue
-  reduce listHead
-  go
+  loop prop
     where
-      go = do
+      loop x =
+        lookAhead >>= \t ->
+          case t of
+            (Elm _ _ COMMA)   -> onComma x
+            (Elm _ _ NEWLINE) -> onNewline x
+            _                 -> return [x]
+
+      onComma x = do
+        shift
+        fmap (x:) parseProperties
+
+      onNewline x = do
         shiftSpaceOrNewline
         shiftSpace -- sometimes having leading space after a newline
-        alt [(isComma, step)
-            ,(isRBrack, return ())
-            ,(anything, failure unexpected)]
+        t2 <- lookAhead
+        case t2 of
+          (Elm _ _ RBRACE) -> return [x]
+          EOF              -> return [x]
+          _                -> fmap (x:) parseProperties
 
-      step = shift >> shiftSpaceOrNewline >> parseValue >> reduce listHead >> go
+parseObject :: StringLike s => F (LALR s) (Value s (Ident s))
+parseObject = do
+  (Elm l c LBRACE) <- shift
+  shiftSpaceOrNewline
+  t <- lookAhead
+  case t of
+    (Elm _ _ RBRACE) -> shift >> return (Mu $ AOBJECT (l,c) [])
+    _  -> do
+      xs <- parseProperties
+      d  <- shift
+      case d of
+        (Elm _ _ RBRACE) -> return $ Mu $ AOBJECT (l,c) xs
+        _                -> failure (unexpected d)
 
-parseMerge :: StringLike s => F (LALR s) ()
-parseMerge = do
-  shift
-  alt [(isRBrack, return ())
-      ,(isRBrace, return ())
-      ,(isEOF, return ())
-      ,(isNewline, return ())
-      ,(anything, go)]
-
+parseList :: StringLike s => F (LALR s) (Value s (Ident s))
+parseList = do
+  (Elm l c LBRACK) <- shift
+  shiftSpaceOrNewline
+  t <- lookAhead
+  case t of
+    (Elm _ _ RBRACK) -> shift >> (return $ Mu $ ALIST (l,c) [])
+    _                -> reduction (l,c) <$> parseValue <*> loop []
   where
-    go = do
-      parseValue
-      reduce mergeP
-      alt [(isSpace, parseMerge)
-          ,(anything, return ())]
+    reduction p x xs = Mu $ ALIST p (x:xs)
+    loop xs = do
+      shiftSpaceOrNewline
+      shiftSpace -- sometimes having leading space after a newline
+      t <- shift
+      case t of
+        (Elm _ _ RBRACK) -> return (reverse xs)
+        (Elm _ _ COMMA)  -> onComma xs
+        _                -> failure (unexpected t)
 
-parseValue :: StringLike s => F (LALR s) ()
-parseValue = do
-  alt [(isString, parseString)
-      ,(isId, parseString)
-      ,(isSubst, shift >> reduce substP)
-      ,(isLBrack, parseList)
-      ,(isLBrace, parseObject)
-      ,(anything, failure unexpected)]
-  alt [(isSpace, parseMerge)
-      ,(anything, return ())]
+    onComma xs = do
+      shiftSpaceOrNewline
+      parseValue >>= (loop . (:xs))
 
-alt :: [(Token s -> Bool, F (LALR s) ())] -> F (LALR s) ()
-alt []               = return ()
-alt ((f, action):xs) = lookAhead f >>= go
+parseSubst :: F (LALR s) (Value s (Ident s))
+parseSubst = withShift (return . go)
   where
-    go isF
-      | isF       = action
-      | otherwise = alt xs
+    go (Elm l c (SUBST s)) = Mu $ ASUBST (l,c) s
+
+parseValue :: StringLike s => F (LALR s) (Value s (Ident s))
+parseValue = loop =<< withLook go
+  where
+    go (Elm _ _ (ID _))     = parseString
+    go (Elm _ _ (STRING _)) = parseString
+    go (Elm _ _ (SUBST _))  = parseSubst
+    go (Elm _ _ LBRACK)     = parseList
+    go (Elm _ _ LBRACE)     = parseObject
+    go x                    = failure (unexpected x)
+
+    loop v = do
+      t <- lookAhead
+      case t of
+        (Elm _ _ SPACE) -> onMergeSpace v
+        _               -> return v
+
+    onMergeSpace v = do
+      shift
+      t <- lookAhead
+      case t of
+        (Elm _ _ RBRACE) -> return v
+        (Elm _ _ RBRACK) -> return v
+        _                -> fmap (Mu . AMERGE v) parseValue
 
 recv :: Monad m => (Token s -> Conduit (Token s) m a) -> Conduit (Token s) m a
 recv k = await >>= \t -> maybe (error "Exhausted source") k t
 
-toCell :: Token s -> Cell s
-toCell (Elm l c s) = CToken (l, c) s
-toCell EOF         = CEOF
-
 makeParser :: (Monad m, IsString s, Show s)
-           => Free (LALR s) ()
-           -> Conduit (Token s) (ErrorT (ConfigError s) m) [Untyped s]
-makeParser instr = (cataFree pure impure instr) ([], Nothing)
+           => Free (LALR s) a
+           -> Conduit (Token s) (ErrorT (ConfigError s) m) a
+makeParser instr = cataFree pure impure instr $ Nothing
   where
-    pure _ (((CProps xs):_),_) = yield (reverse xs)
+    pure a _ = yield a
 
-    impure (Shift k)       = shifting k
-    impure (Reduce p k)    = reducing p k
-    impure (LookAhead p k) = looking p k
-    impure (Failure k)     = failing k
-    impure PrintStack      = reporting
+    impure (Shift k)     = shifting k
+    impure (LookAhead k) = looking k
+    impure (Failure e)   = failing e
 
-    shifting k (stack, ahead) = maybe (recv go) go ahead
+    shifting k ahead = maybe (recv go) go ahead
       where
-        go t = k (toCell t:stack, Nothing)
+        go t = k t $ Nothing
 
-    reducing p k (stack, ahead) =
-      let (prod, stack1) = p stack in k ((prod:stack1), ahead)
-
-    looking p k (stack, ahead) = maybe (recv go) go ahead
+    looking k ahead = maybe (recv go) go ahead
       where
-        go h = k (p h) (stack, Just h)
+        go t = k t $ (Just t)
 
-    failing k (_, (Just h)) = lift $ throwError (ConfigError $ k h)
-
-    reporting (stack, _) = error $ show stack
+    failing e _ = lift $ throwError (ConfigError e)
 
 unexpected :: (IsString s, Monoid s, Show s) => Token s -> s
 unexpected (Elm l c sym) =
