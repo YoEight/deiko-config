@@ -25,28 +25,29 @@ import Data.Hashable
 import qualified Data.Map as M
 import Data.Monoid (Monoid(..), (<>))
 import Data.String (IsString (..))
+import qualified Data.Text as T
 import Data.Traversable (traverse, sequence)
 import Data.Tuple (swap)
 import Text.Deiko.Config.Util
 import Text.Deiko.Config.Internal
 
-type Scoping s = s -> Value s s
-type Registering s = State (Register s) (Annoted s)
-type Phase s a o =
-  forall m. (Functor m, MonadError (ConfigError s) m) => Conduit a m o
+type Scoping s = s -> Value s
+type Registering s = State Register Annoted
+type Phase a o =
+  forall m. (Functor m, MonadError ConfigError m) => Conduit a m o
 
-data Constraint s = Equal (Position, Type s) (Position, Type s) deriving Show
+data Constraint = Equal (Position, Type) (Position, Type) deriving Show
 
-data TypeState s = TypeState { tsTable       :: TypeTable s
-                             , tsConstraints :: [Constraint s] } deriving Show
+data TypeState = TypeState { tsTable       :: TypeTable
+                           , tsConstraints :: [Constraint] } deriving Show
 
-data Config s = Config { cReg   :: Register s
-                       , cState :: TypeState s } deriving Show
+data Config = Config { cReg   :: Register
+                     , cState :: TypeState } deriving Show
 
-typecheck :: StringLike s => Phase s [Untyped s] (Config s)
+typecheck :: Phase [Untyped] Config
 typecheck = typingPhase =$= withDefaultReg =$= checkingPhase =$= simplifyPhase
 
-typingPhase :: StringLike s => Phase s [Untyped s] ([Typed s], TypeState s)
+typingPhase :: Phase [Untyped] ([Typed], TypeState)
 typingPhase = awaitForever go
   where
     go props =
@@ -55,19 +56,18 @@ typingPhase = awaitForever go
           action2 = lift $ evalStateT action (TypeState I.empty []) in
       action2 >>= yield
 
-manualSimplify :: (MonadError (ConfigError s) m, Functor m, StringLike s)
-               => Config s
-               -> Source m (Config s)
+manualSimplify :: (MonadError ConfigError m, Functor m)
+               => Config
+               -> Source m Config
 manualSimplify config =
   yield config =$= simplifyPhase
 
-withDefaultReg :: IsString s => Phase s (a, b) (a, b, Register s)
+withDefaultReg :: Phase (a, b) (a, b, Register)
 withDefaultReg = awaitForever go
   where
     go (a, b) = yield (a, b, I.empty)
 
-checkingPhase :: StringLike s
-              => Phase s ([Typed s], TypeState s, Register s) (Config s)
+checkingPhase :: Phase ([Typed], TypeState, Register) Config
 checkingPhase = awaitForever go
   where
     go (props, state, reg) =
@@ -75,7 +75,7 @@ checkingPhase = awaitForever go
           step xs = yield $ Config reg2 state{tsConstraints=xs} in
       lift (checking state) >>= step
 
-simplifyPhase :: StringLike s => Phase s (Config s) (Config s)
+simplifyPhase :: Phase Config Config
 simplifyPhase = awaitForever go
   where
     go (Config reg ts) =
@@ -84,7 +84,7 @@ simplifyPhase = awaitForever go
       do (tbl2, reg2) <- execStateT action (tbl, reg)
          yield (Config reg2 ts{tsTable=tbl2})
 
-scoping :: StringLike s => Untyped s -> Scoped s
+scoping :: Untyped -> Scoped
 scoping (Prop id ast) = Prop key ((para scopingAST ast) (key <> "."))
   where
     key = makeId id
@@ -110,9 +110,9 @@ scoping (Prop id ast) = Prop key ((para scopingAST ast) (key <> "."))
             let key = scope <> makeId id in
             property key (f (key <> "."))
 
-typing :: (MonadError (ConfigError s) m, Functor m, StringLike s)
-       => Scoped s
-       -> StateT (TypeState s) m (Typed s)
+typing :: (MonadError ConfigError m, Functor m)
+       => Scoped
+       -> StateT TypeState m Typed
 typing (Prop key ast) = do
   (t, ast1) <- cata typingAST ast
   modify (types t)
@@ -153,7 +153,7 @@ typing (Prop key ast) = do
           where
             step (Prop key x) = liftM (\(t, ast1) -> (Prop (key, t) ast1)) x
 
-check :: StringLike s => Constraint s -> RWS (TypeTable s) () [Constraint s] s
+check :: Constraint -> RWS TypeTable () [Constraint] T.Text
 check c@(Equal (px, tx) (py, ty)) =
   resolveType tx >>= \rx ->
     resolveType ty >>= \ry ->
@@ -163,15 +163,12 @@ check c@(Equal (px, tx) (py, ty)) =
             let failure _ = checkFail (px, tx) (py, ty) in
             maybe (unresolved c) failure (rx >> ry)
 
-unresolved :: (IsString s, Monoid s)
-           => Constraint s
-           -> RWS (TypeTable s) () [Constraint s] s
+unresolved :: Constraint -> RWS TypeTable () [Constraint] T.Text
 unresolved c = fmap (const "") (modify (c:))
 
-checkFail :: (IsString s, Hashable s, Monoid s)
-          => (Position, Type s)
-          -> (Position, Type s)
-          -> RWS (TypeTable s) () a s
+checkFail :: (Position, Type)
+          -> (Position, Type)
+          -> RWS TypeTable () a T.Text
 checkFail (px, symx) (py, symy) = do
   xlabel <- showType symx
   ylabel <- showType symy
@@ -184,16 +181,16 @@ checkFail (px, symx) (py, symy) = do
                         " but having " <> ylabel <>
                         " " <> ypos <> "\n"
 
-checking :: (StringLike s, MonadError (ConfigError s) m)
-         => TypeState s
-         -> m [Constraint s]
+checking :: (MonadError ConfigError m)
+         => TypeState
+         -> m [Constraint]
 checking (TypeState types constrs) =
   let action          = fmap mconcat (traverse check constrs)
       (msg, unres, _) = runRWS action types []
       isEmpty x = x == mempty in
   if isEmpty msg then return unres else throwError (ConfigError msg)
 
-register :: (IsString s, Hashable s) => Typed s -> State (Register s) ()
+register :: Typed -> State Register ()
 register (Prop (key, typ) ast) =
   cata registerAST ast >>= \ast1 ->
     modify (I.insert (hash key) (typ, ast1))
@@ -211,9 +208,9 @@ register (Prop (key, typ) ast) =
               modify (I.insert (hash key) (typ, ast)) >>
               return (Prop (key, typ) ast)
 
-simplify :: (Monad m, Functor m, StringLike s)
-         => (Int, (Type s, Value s (s, Type s)))
-         -> StateT (TypeTable s, Register s) m ()
+simplify :: (Monad m, Functor m)
+         => (Int, (Type, Value (T.Text, Type)))
+         -> StateT (TypeTable, Register) m ()
 simplify (key, (typ, value)) =
   get >>= \(table, reg) ->
     let resolved =
@@ -226,10 +223,10 @@ simplify (key, (typ, value)) =
             put (table2, reg2)
         | otherwise -> return ()
 
-simplifying :: (Monad m, Functor m, StringLike s)
+simplifying :: (Monad m, Functor m)
             => Int
-            -> Annoted s
-            -> StateT (TypeTable s, Register s) m (Type s, Annoted s)
+            -> Annoted
+            -> StateT (TypeTable, Register) m (Type, Annoted)
 simplifying key value = cata simplifyAST value
   where
     simplifyAST (ASTRING p s)  = return (stringType, string p s)
@@ -259,10 +256,7 @@ simplifying key value = cata simplifyAST value
               reg2   = I.insert key2 (typ2, value3) reg in
           fmap (const (typ2, value3)) (put (table2, reg2))
 
-merging :: (IsString s, Monoid s)
-        => (Type s, Annoted s)
-        -> (Type s, Annoted s)
-        -> (Type s, Annoted s)
+merging :: (Type, Annoted) -> (Type, Annoted) -> (Type, Annoted)
 merging (tx, vx) (_, vy) =
   case (vx, vy) of
     (Mu (ASTRING p xs), Mu (ASTRING _ ys)) -> (tx, string p (xs <> " " <> ys))

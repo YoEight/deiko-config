@@ -4,82 +4,77 @@
 module Text.Deiko.Config.Internal where
 
 import Control.Monad (liftM)
-import Control.Monad.Error
+import Control.Monad.Error (Error(..))
 import Control.Monad.Reader (MonadReader(..), asks)
 import Control.Applicative (Applicative(..), (<$>))
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Foldable (Foldable, foldMap)
 import qualified Data.Map as M
 import qualified Data.IntMap as I
-import Data.Hashable
+import Data.Hashable (hash)
 import Data.Monoid (Monoid(..), (<>))
 import Data.String (IsString(..))
-import qualified Data.Text as TS
-import qualified Data.Text.Lazy as TL
+import qualified Data.Text as T
 import Data.Traversable (Traversable, traverse)
 import Text.Deiko.Config.Util
 
-data Token s = Elm Int Int (Sym s)
-             | EOF deriving Show
+data Token = Elm !Int !Int !Sym
+           | EOF deriving Show
 
-data Sym s = ID s
-           | STRING s
-           | SUBST s
-           | ERROR s
-           | LBRACE
-           | RBRACE
-           | LBRACK
-           | RBRACK
-           | EQUAL
-           | SPACE
-           | NEWLINE
-           | COMMA
-           | DOT deriving Show
+data Sym = ID !T.Text
+         | STRING !T.Text
+         | SUBST !T.Text
+         | ERROR !T.Text
+         | LBRACE
+         | RBRACE
+         | LBRACK
+         | RBRACK
+         | EQUAL
+         | SPACE
+         | NEWLINE
+         | COMMA
+         | DOT deriving Show
 
 type Position = (Int, Int)
 
-data ConfigError s = ConfigError s deriving Show
+newtype ConfigError = ConfigError T.Text deriving Show
 
-data AST s name a = ASTRING Position s
-                  | ALIST Position [a]
-                  | ASUBST Position s
-                  | AMERGE a a
-                  | AOBJECT Position [Prop name a] deriving Show
+data AST name a = ASTRING !Position !T.Text
+                | ALIST !Position [a]
+                | ASUBST !Position !T.Text
+                | AMERGE a a
+                | AOBJECT !Position [Prop name a] deriving Show
 
-data Prop name a = Prop { propName  :: name
+data Prop name a = Prop { propName  :: !name
                         , propValue :: a } deriving Show
 
-type Value s a = Mu (AST s a)
+type Value s = Mu (AST s)
 
-type Property s name = Prop name (Value s name)
+type Property name = Prop name (Value name)
 
-type Untyped s = Property s (Ident s)
+type Untyped = Property Ident
 
-type Typed s = Property s (s, Type s)
+type Typed = Property (T.Text, Type)
 
-type Scoped s = Property s s
+type Scoped = Property T.Text
 
-type Register s = I.IntMap (Type s, Annoted s)
+type Register = I.IntMap (Type, Annoted)
 
-data Ident s = Ident Position s
-             | Select (Ident s) (Ident s) deriving Show
+data Ident = Ident !Position !T.Text
+           | Select !Ident !Ident deriving Show
 
-type TypeTable s = I.IntMap (Type s)
+type TypeTable = I.IntMap Type
 
-type Type s = Mu (TypeS s)
+type Type = Mu TypeS
 
-data TypeS s a = TAny
-               | TString
-               | TObject
-               | TList a
-               | TRef s deriving Show
+data TypeS a = TAny
+             | TString
+             | TObject
+             | TList a
+             | TRef !T.Text deriving Show
 
-type Annoted s = Value s (s, Type s)
+type Annoted = Value (T.Text, Type)
 
-class (IsString s, Monoid s, Show s, Hashable s, Eq s) => StringLike s
-
-instance Functor (TypeS s) where
+instance Functor TypeS where
   fmap _ TAny      = TAny
   fmap _ TString   = TString
   fmap _ TObject   = TObject
@@ -95,67 +90,59 @@ instance Foldable (Prop i) where
 instance Traversable (Prop i) where
   traverse f (Prop id a) = fmap (Prop id) (f a)
 
-instance Functor (AST s i) where
+instance Functor (AST i) where
   fmap f (ASTRING p x)   = ASTRING p x
   fmap f (ALIST p xs)    = ALIST p (fmap f xs)
   fmap f (ASUBST p x)    = ASUBST p x
   fmap f (AMERGE x y)    = AMERGE (f x) (f y)
   fmap f (AOBJECT p xs)  = AOBJECT p (fmap (fmap f) xs)
 
-instance Foldable (AST s i) where
+instance Foldable (AST i) where
   foldMap _ (ASTRING _ _)  = mempty
   foldMap f (ALIST _ xs)   = foldMap f xs
   foldMap _ (ASUBST _ _)   = mempty
   foldMap f (AMERGE x y)   = f x `mappend` f y
   foldMap f (AOBJECT _ xs) = foldMap (foldMap f) xs
 
-instance Traversable (AST s i) where
+instance Traversable (AST i) where
   traverse f (ALIST p xs)   = fmap (ALIST p) (traverse f xs)
   traverse f (AMERGE x y)   = AMERGE <$> f x <*> f y
   traverse f (AOBJECT p xs) = fmap (AOBJECT p) (traverse (traverse f) xs)
   traverse f (ASTRING p x)  = pure (ASTRING p x)
   traverse f (ASUBST p x)   = pure (ASUBST p x)
 
-instance IsString s => Error (ConfigError s) where
+instance Error ConfigError where
   noMsg  = ConfigError "Panic"
   strMsg = ConfigError . fromString
 
-instance StringLike String
-instance StringLike TS.Text
-instance StringLike TL.Text
-instance StringLike BS.ByteString
-instance StringLike BL.ByteString
-
-castType :: TypeS a b -> Type a
+castType :: TypeS a -> Type
 castType TAny     = Mu TAny
 castType TString  = Mu TString
 castType TObject  = Mu TObject
 castType (TRef s) = Mu (TRef s)
 
-string :: IsString s => Position -> s -> Value s a
+string :: Position -> T.Text -> Value a
 string p x = Mu $ ASTRING p x
 
-list :: Position -> [Value s a] -> Value s a
+list :: Position -> [Value a] -> Value a
 list p xs = Mu $ ALIST p xs
 
-object :: Position -> [Property s a] -> Value s a
+object :: Position -> [Property a] -> Value a
 object p xs = Mu $ AOBJECT p xs
 
-subst :: Position -> s -> Value s a
+subst :: Position -> T.Text -> Value a
 subst p x = Mu $ ASUBST p x
 
-merge :: Value s a -> Value s a -> Value s a
+merge :: Value a -> Value a -> Value a
 merge x y = Mu $ AMERGE x y
 
-nil :: Position -> Value s a
+nil :: Position -> Value a
 nil p = Mu $ ALIST p []
 
-property :: a -> Value s a -> Property s a
+property :: a -> Value a -> Property a
 property a v = Prop a v
 
-resolveType :: (MonadReader (TypeTable s) m, Hashable s)
-            => Type s
-            -> m (Maybe Int)
+resolveType :: MonadReader TypeTable m => Type -> m (Maybe Int)
 resolveType = cata go
   where
     go TAny      = return (Just 1)
@@ -167,16 +154,13 @@ resolveType = cata go
     resolveRef s =
       maybe (return Nothing) (cata go) =<< asks (I.lookup (hash s))
 
-sameType :: (MonadReader (TypeTable s) m, Hashable s)
-         => Type s
-         -> Type s
-         -> m Bool
+sameType :: MonadReader TypeTable m => Type -> Type -> m Bool
 sameType x y = do
   rx <- resolveType x
   ry <- resolveType y
   return (rx == ry)
 
-listOf :: Type s -> Maybe (Type s)
+listOf :: Type -> Maybe Type
 listOf typ = (cata go typ) False
   where
     go (TList k) False = k True
@@ -184,9 +168,7 @@ listOf typ = (cata go typ) False
     go _ False         = Nothing
     go x _             = Just $ castType x
 
-showType :: (MonadReader (TypeTable s) m, IsString s, Hashable s, Monoid s)
-         => Type s
-         -> m s
+showType :: MonadReader TypeTable m => Type -> m T.Text
 showType = cata go
   where
     go TAny      = return "A"
@@ -204,11 +186,11 @@ showType = cata go
 showPos :: Position -> String
 showPos (l, c) = "(line: " ++ show l ++ ", col: " ++ show c ++ ")"
 
-makeId :: (IsString s, Monoid s) => Ident s -> s
+makeId :: Ident -> T.Text
 makeId (Ident _ x)  = x
 makeId (Select x y) = makeId x <> "." <> makeId y
 
-pos :: Mu (AST s a) -> Position
+pos :: Mu (AST a) -> Position
 pos = cata go
   where
     go (ASTRING p _) = p
@@ -217,20 +199,20 @@ pos = cata go
     go (AMERGE p _)  = p
     go (AOBJECT p _) = p
 
-stringType :: Type s
+stringType :: Type
 stringType = Mu TString
 
-objectType :: Type s
+objectType :: Type
 objectType = Mu TObject
 
-listTypeOf :: Type s -> Type s
+listTypeOf :: Type -> Type
 listTypeOf = Mu . TList
 
-nilType :: Type s
+nilType :: Type
 nilType = listTypeOf (Mu TAny)
 
-anyType :: Type s
+anyType :: Type
 anyType = Mu TAny
 
-refType :: IsString s => s -> Type s
+refType :: T.Text -> Type
 refType = Mu . TRef

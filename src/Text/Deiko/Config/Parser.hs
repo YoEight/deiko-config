@@ -3,60 +3,61 @@
 module Text.Deiko.Config.Parser where
 
 import Control.Applicative ((<*>), (<$>))
-import Control.Monad
-import Control.Monad.Error
+import Control.Monad (void)
+import Control.Monad.Error (ErrorT, throwError, lift)
 import Control.Monad.Free (Free, wrap)
 import Control.Monad.Free.Church (F, fromF)
-import Data.Conduit
+import Data.Conduit (Conduit, await, yield)
 import Data.Foldable (traverse_, foldMap)
 import Data.Monoid (Monoid, (<>))
 import Data.String (IsString (..))
+import qualified Data.Text as T
 import Text.Deiko.Config.Internal
 import Text.Deiko.Config.Util
 
-data LALR s a = Shift (Token s -> a)
-              | LookAhead (Token s -> a)
-              | Failure s
+data LALR a = Shift (Token -> a)
+            | LookAhead (Token -> a)
+            | Failure !T.Text
 
-instance Functor (LALR s) where
+instance Functor LALR where
   fmap f (Shift k)     = Shift (f . k)
   fmap f (LookAhead k) = LookAhead (f . k)
   fmap _ (Failure e)   = Failure e
 
-shift :: F (LALR s) (Token s)
+shift :: F LALR Token
 shift = wrap $ Shift return
 
-shift_ :: F (LALR s) ()
+shift_ :: F LALR ()
 shift_ = void shift
 
-lookAhead :: F (LALR s) (Token s)
+lookAhead :: F LALR Token
 lookAhead = wrap $ LookAhead return
 
-failure :: s -> F (LALR s) a
+failure :: T.Text -> F LALR a
 failure e = wrap $ Failure e
 
-withLook :: (Token s -> F (LALR s) a) -> F (LALR s) a
+withLook :: (Token -> F LALR a) -> F LALR a
 withLook k = lookAhead >>= k
 
-withShift :: (Token s -> F (LALR s) a) -> F (LALR s) a
+withShift :: (Token -> F LALR a) -> F LALR a
 withShift k = shift >>= k
 
-shiftSpace :: F (LALR s) ()
+shiftSpace :: F LALR ()
 shiftSpace = withLook go
   where
     go (Elm _ _ SPACE) = shift_
     go _              = return ()
 
-shiftNewline :: F (LALR s) ()
+shiftNewline :: F LALR ()
 shiftNewline = withLook go
   where
     go (Elm _ _ NEWLINE) = shift_
     go _                 = return ()
 
-shiftSpaceOrNewline :: F (LALR s) ()
+shiftSpaceOrNewline :: F LALR ()
 shiftSpaceOrNewline = shiftSpace >> shiftNewline
 
-parseId :: StringLike s => F (LALR s) (Ident s)
+parseId :: F LALR Ident
 parseId = do
   t <- shift
   case t of
@@ -64,7 +65,7 @@ parseId = do
     (Elm l c (STRING s)) -> return (Ident (l,c) s)
     _                    -> failure (unexpected t)
 
-parseSelect :: StringLike s => F (LALR s) (Ident s)
+parseSelect :: F LALR Ident
 parseSelect = do
   id <- parseId
   loop id
@@ -75,14 +76,14 @@ parseSelect = do
           (Elm _ _ DOT) -> shift_ >> fmap (Select id) parseSelect
           _             -> return id
 
-parseString :: F (LALR s) (Value s (Ident s))
+parseString :: F LALR (Value Ident)
 parseString = do
   t <- shift
   case t of
     (Elm l c (ID s))     -> return $ Mu $ ASTRING (l,c) s
     (Elm l c (STRING s)) -> return $ Mu $ ASTRING (l,c) s
 
-parseProperty :: StringLike s => F (LALR s) (Untyped s)
+parseProperty :: F LALR Untyped
 parseProperty = do
   shiftSpace
   id <- parseSelect
@@ -99,7 +100,7 @@ parseProperty = do
       v <- parseValue
       return $ Prop id v
 
-parseProperties :: StringLike s => F (LALR s) [Untyped s]
+parseProperties :: F LALR [Untyped]
 parseProperties = do
   shiftSpaceOrNewline
   prop <- parseProperty
@@ -126,7 +127,7 @@ parseProperties = do
           EOF              -> return [x]
           _                -> fmap (x:) parseProperties
 
-parseObject :: StringLike s => F (LALR s) (Value s (Ident s))
+parseObject :: F LALR (Value Ident)
 parseObject = do
   (Elm l c LBRACE) <- shift
   shiftSpaceOrNewline
@@ -140,7 +141,7 @@ parseObject = do
         (Elm _ _ RBRACE) -> return $ Mu $ AOBJECT (l,c) xs
         _                -> failure (unexpected d)
 
-parseList :: StringLike s => F (LALR s) (Value s (Ident s))
+parseList :: F LALR (Value Ident)
 parseList = do
   (Elm l c LBRACK) <- shift
   shiftSpaceOrNewline
@@ -163,12 +164,12 @@ parseList = do
       shiftSpaceOrNewline
       parseValue >>= (loop . (:xs))
 
-parseSubst :: F (LALR s) (Value s (Ident s))
+parseSubst :: F LALR (Value Ident)
 parseSubst = withShift (return . go)
   where
     go (Elm l c (SUBST s)) = Mu $ ASUBST (l,c) s
 
-parseValue :: StringLike s => F (LALR s) (Value s (Ident s))
+parseValue :: F LALR (Value Ident)
 parseValue = loop =<< withLook go
   where
     go (Elm _ _ (ID _))     = parseString
@@ -192,12 +193,12 @@ parseValue = loop =<< withLook go
         (Elm _ _ RBRACK) -> return v
         _                -> fmap (Mu . AMERGE v) parseValue
 
-recv :: Monad m => (Token s -> Conduit (Token s) m a) -> Conduit (Token s) m a
+recv :: Monad m => (Token -> Conduit Token m a) -> Conduit Token m a
 recv k = await >>= \t -> maybe (error "Exhausted source") k t
 
-makeParser :: (Monad m, IsString s, Show s)
-           => Free (LALR s) a
-           -> Conduit (Token s) (ErrorT (ConfigError s) m) a
+makeParser :: Monad m
+           => Free LALR a
+           -> Conduit Token (ErrorT ConfigError m) a
 makeParser instr = cataFree pure impure instr $ Nothing
   where
     pure a _ = yield a
@@ -216,7 +217,7 @@ makeParser instr = cataFree pure impure instr $ Nothing
 
     failing e _ = lift $ throwError (ConfigError e)
 
-unexpected :: (IsString s, Monoid s, Show s) => Token s -> s
+unexpected :: Token -> T.Text
 unexpected (Elm l c sym) =
   "Unexpected token " <> symStr <> " at (" <> line <> ", " <> col <> ")"
     where
@@ -224,6 +225,6 @@ unexpected (Elm l c sym) =
       line   = fromString $ show l
       col    = fromString $ show c
 
-parser :: (Monad m, StringLike s)
-       => Conduit (Token s) (ErrorT (ConfigError s) m) [Untyped s]
+parser :: Monad m
+       => Conduit Token (ErrorT ConfigError m) [Untyped]
 parser = makeParser (fromF parseProperties)

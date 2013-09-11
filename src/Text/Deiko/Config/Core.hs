@@ -26,28 +26,25 @@ import Control.Monad.Trans (lift)
 import Control.Monad.Error (ErrorT, throwError)
 import Control.Monad.Reader (ReaderT (..))
 import Control.Monad.State (get, put, execState)
-import Data.Conduit (Conduit, Producer, Sink, Source, ($=), ($$), (=$=), yield
-                    ,awaitForever, runResourceT, ResourceT, await)
-import Data.Functor.Identity (Identity)
+import Data.Conduit (($$), await)
 import Data.Foldable (traverse_)
 import qualified Data.IntMap as IM
 import Data.Hashable (hash)
-import Data.String (IsString (..))
+import qualified Data.Text as T
 import qualified Text.Deiko.Config.Internal as I
 import Text.Deiko.Config.Semantic (Config (..), TypeState (..), typecheck
                                   ,manualSimplify)
 import Text.Deiko.Config.Types (stringValue, intValue, boolValue, listValue
                                ,propertyNotFound, Conversion)
-import Text.Parsec.Prim (Stream)
 
 data CString = CString
 data CList a = CList a
 data CObject = CObject
-data Val s a b = Val (I.Value s b)
-data Pair s = forall t. TypeOf t => s := (Val s t (s, I.Type s))
+data Val a b = Val (I.Value b)
+data Pair = forall t. TypeOf t => T.Text := (Val t (T.Text, I.Type))
 
 class TypeOf t where
-  typeof :: IsString s => Val s t a -> I.Type s
+  typeof ::  Val t a -> I.Type
 
 instance TypeOf CString where
   typeof _ = I.stringType
@@ -56,34 +53,34 @@ instance TypeOf CObject where
   typeof _ = I.objectType
 
 instance TypeOf t => TypeOf (CList t) where
-  typeof _ = I.listTypeOf (typeof (undefined :: IsString s => Val s t a))
+  typeof _ = I.listTypeOf (typeof (undefined :: Val t a))
 
 falsePos :: I.Position
 falsePos = (-1, -1)
 
-string :: IsString s => s -> Val s CString a
+string :: T.Text -> Val CString a
 string = Val . I.string falsePos
 
-list :: [Val s a b] -> Val s (CList a) b
+list :: [Val a b] -> Val (CList a) b
 list = Val . I.list falsePos . fmap (\(Val x) -> x)
 
-nil :: Val s (CList a) b
+nil :: Val (CList a) b
 nil = Val $ I.nil falsePos
 
-merge :: Val s a b -> Val s a b -> Val s a b
+merge :: Val a b -> Val a b -> Val a b
 merge (Val x) (Val y) = Val $ I.merge x y
 
-object :: IsString s => [Pair s] -> Val s CObject (s, I.Type s)
+object :: [Pair] -> Val CObject (T.Text, I.Type)
 object = Val . I.object falsePos . fmap go
   where
     go (name := v@(Val value)) = I.property (name, typeof v) value
 
-getValueWithAs :: (I.StringLike s, Monad m, Functor m)
-               => Conversion s v
-               -> [Pair s]
-               -> s
-               -> Config s
-               -> ErrorT (I.ConfigError s) m v
+getValueWithAs :: ( Monad m, Functor m)
+               => Conversion v
+               -> [Pair]
+               -> T.Text
+               -> Config
+               -> ErrorT I.ConfigError m v
 getValueWithAs k [] key config = getValueAs k key config
 getValueWithAs k xs key config =
   process $$ (await >>= (lift . getValueAs k key . unJust))
@@ -100,76 +97,76 @@ getValueWithAs k xs key config =
       let config1 = execState (traverse_ go props) config in
       manualSimplify config1
 
-getValueAs :: (I.StringLike s, Monad m)
-           => Conversion s v
-           -> s
-           -> Config s
-           -> ErrorT (I.ConfigError s) m v
+getValueAs :: Monad m
+           => Conversion v
+           -> T.Text
+           -> Config
+           -> ErrorT I.ConfigError m v
 getValueAs k key (Config reg st) =
   maybe (throwError $ propertyNotFound key) go (IM.lookup (hash key) reg)
     where
       go (typ, value) = runReaderT (k key typ value) (tsTable st)
 
-getListOf :: (I.StringLike s, Monad m)
-          => Conversion s v
-          -> s
-          -> Config s
-          -> ErrorT (I.ConfigError s) m [v]
+getListOf :: Monad m
+          => Conversion v
+          -> T.Text
+          -> Config
+          -> ErrorT I.ConfigError m [v]
 getListOf k = getValueAs (listValue k)
 
-getString :: (I.StringLike s, Monad m)
-          => s
-          -> Config s
-          -> ErrorT (I.ConfigError s) m s
+getString :: Monad m
+          => T.Text
+          -> Config
+          -> ErrorT I.ConfigError m T.Text
 getString = getValueAs stringValue
 
-getInt :: (I.StringLike s, Stream s Identity Char, Monad m)
-       => s
-       -> Config s
-       -> ErrorT (I.ConfigError s) m Int
+getInt :: Monad m
+       => T.Text
+       -> Config
+       -> ErrorT I.ConfigError m Int
 getInt = getValueAs intValue
 
-getBool :: (I.StringLike s, Stream s Identity Char, Monad m)
-        => s
-        -> Config s
-        -> ErrorT (I.ConfigError s) m Bool
+getBool :: Monad m
+        => T.Text
+        -> Config
+        -> ErrorT I.ConfigError m Bool
 getBool = getValueAs boolValue
 
-getStrings :: (I.StringLike s, Monad m)
-           => s
-           -> Config s
-           -> ErrorT (I.ConfigError s) m [s]
+getStrings :: Monad m
+           => T.Text
+           -> Config
+           -> ErrorT I.ConfigError m [T.Text]
 getStrings = getListOf stringValue
 
-getInts :: (I.StringLike s, Stream s Identity Char, Monad m)
-        => s
-        -> Config s
-        -> ErrorT (I.ConfigError s) m [Int]
+getInts :: Monad m
+        => T.Text
+        -> Config
+        -> ErrorT I.ConfigError m [Int]
 getInts = getListOf intValue
 
-getBools :: (I.StringLike s, Stream s Identity Char, Monad m)
-         => s
-         -> Config s
-         -> ErrorT (I.ConfigError s) m [Bool]
+getBools :: Monad m
+         => T.Text
+         -> Config
+         -> ErrorT I.ConfigError m [Bool]
 getBools = getListOf boolValue
 
-getStringWith :: (I.StringLike s, Monad m, Functor m)
-              => [Pair s]
-              -> s
-              -> Config s
-              -> ErrorT (I.ConfigError s) m s
+getStringWith :: (Monad m, Functor m)
+              => [Pair]
+              -> T.Text
+              -> Config
+              -> ErrorT I.ConfigError m T.Text
 getStringWith = getValueWithAs stringValue
 
-getIntWith :: (I.StringLike s, Stream s Identity Char, Monad m, Functor m)
-              => [Pair s]
-              -> s
-              -> Config s
-              -> ErrorT (I.ConfigError s) m Int
+getIntWith :: (Monad m, Functor m)
+              => [Pair]
+              -> T.Text
+              -> Config
+              -> ErrorT I.ConfigError m Int
 getIntWith = getValueWithAs intValue
 
-getBoolWith :: (I.StringLike s, Stream s Identity Char, Monad m, Functor m)
-            => [Pair s]
-            -> s
-            -> Config s
-            -> ErrorT (I.ConfigError s) m Bool
+getBoolWith :: (Monad m, Functor m)
+            => [Pair]
+            -> T.Text
+            -> Config
+            -> ErrorT I.ConfigError m Bool
 getBoolWith = getValueWithAs boolValue
