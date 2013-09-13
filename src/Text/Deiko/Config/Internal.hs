@@ -1,20 +1,22 @@
 {-# LANGUAGE FlexibleContexts     #-}
 {-# LANGUAGE OverloadedStrings    #-}
 {-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE DeriveDataTypeable   #-}
 module Text.Deiko.Config.Internal where
 
-import Control.Monad (liftM)
-import Control.Monad.Error (Error(..))
-import Control.Monad.Reader (MonadReader(..), asks)
 import Control.Applicative (Applicative(..), (<$>))
+import Control.Exception (Exception)
+import Control.Monad (liftM)
+import Control.Monad.Reader (MonadReader(..), asks)
 import Data.Foldable (Foldable, foldMap)
-import qualified Data.Map as M
-import qualified Data.IntMap as I
 import Data.Hashable (hash)
+import qualified Data.IntMap as I
+import qualified Data.Map as M
 import Data.Monoid (Monoid(..), (<>))
 import Data.String (IsString(..))
 import qualified Data.Text as T
 import Data.Traversable (Traversable, traverse)
+import Data.Typeable (Typeable)
 import Text.Deiko.Config.Util
 
 data Token = Elm !Int !Int !Sym
@@ -36,7 +38,9 @@ data Sym = ID !T.Text
 
 type Position = (Int, Int)
 
-newtype ConfigError = ConfigError T.Text deriving Show
+newtype ConfigError = ConfigError T.Text deriving (Show, Typeable)
+
+instance Exception ConfigError
 
 data AST name a = ASTRING !Position !T.Text
                 | ALIST !Position [a]
@@ -110,10 +114,6 @@ instance Traversable (AST i) where
   traverse f (AOBJECT p xs) = fmap (AOBJECT p) (traverse (traverse f) xs)
   traverse f (ASTRING p x)  = pure (ASTRING p x)
   traverse f (ASUBST p x)   = pure (ASUBST p x)
-
-instance Error ConfigError where
-  noMsg  = ConfigError "Panic"
-  strMsg = ConfigError . fromString
 
 castType :: TypeS a -> Type
 castType TAny     = Mu TAny

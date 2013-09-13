@@ -11,30 +11,31 @@ module Text.Deiko.Config.Semantic
   ) where
 
 import Prelude hiding (sequence)
-import Control.Arrow ((***))
 import Control.Applicative (Applicative (..), (<$>))
-import Control.Monad.Error hiding (sequence)
-import Control.Monad.State (StateT, State, execState, evalState, evalStateT
-                           , execStateT)
+import Control.Arrow ((***))
+import Control.Monad (liftM)
+import Control.Monad.Catch (MonadCatch, throwM)
 import Control.Monad.Reader (Reader, runReader)
 import Control.Monad.RWS (RWS, modify, get, gets, ask, asks, runRWS, put)
-import Data.Conduit (Conduit, Source, awaitForever, yield, (=$=))
+import Control.Monad.State (StateT, State, execState, evalState, evalStateT
+                           , execStateT)
+import Control.Monad.Trans (lift)
 import Data.Foldable (traverse_, foldMap)
+import Data.Hashable (hash)
 import qualified Data.IntMap as I
-import Data.Hashable
 import qualified Data.Map as M
 import Data.Monoid (Monoid(..), (<>))
 import Data.String (IsString (..))
 import qualified Data.Text as T
 import Data.Traversable (traverse, sequence)
 import Data.Tuple (swap)
+import Pipes (Pipe, Producer, yield, await, (>->), cat, for, (>~))
 import Text.Deiko.Config.Util
 import Text.Deiko.Config.Internal
 
 type Scoping s = s -> Value s
 type Registering s = State Register Annoted
-type Phase a o =
-  forall m. (Functor m, MonadError ConfigError m) => Conduit a m o
+type Phase a o = forall m r. (Functor m, MonadCatch m) => Pipe a o m r
 
 data Constraint = Equal (Position, Type) (Position, Type) deriving Show
 
@@ -45,10 +46,10 @@ data Config = Config { cReg   :: Register
                      , cState :: TypeState } deriving Show
 
 typecheck :: Phase [Untyped] Config
-typecheck = typingPhase =$= withDefaultReg =$= checkingPhase =$= simplifyPhase
+typecheck = typingPhase >-> withDefaultReg >-> checkingPhase >-> simplifyPhase
 
 typingPhase :: Phase [Untyped] ([Typed], TypeState)
-typingPhase = awaitForever go
+typingPhase = for cat go
   where
     go props =
       let props2  = fmap scoping props
@@ -56,19 +57,17 @@ typingPhase = awaitForever go
           action2 = lift $ evalStateT action (TypeState I.empty []) in
       action2 >>= yield
 
-manualSimplify :: (MonadError ConfigError m, Functor m)
-               => Config
-               -> Source m Config
+manualSimplify :: (MonadCatch m, Functor m) => Config -> Producer Config m r
 manualSimplify config =
-  yield config =$= simplifyPhase
+  return config >~ simplifyPhase
 
 withDefaultReg :: Phase (a, b) (a, b, Register)
-withDefaultReg = awaitForever go
+withDefaultReg = for cat go
   where
     go (a, b) = yield (a, b, I.empty)
 
 checkingPhase :: Phase ([Typed], TypeState, Register) Config
-checkingPhase = awaitForever go
+checkingPhase = for cat go
   where
     go (props, state, reg) =
       let reg2    = execState (traverse register props) reg
@@ -76,7 +75,7 @@ checkingPhase = awaitForever go
       lift (checking state) >>= step
 
 simplifyPhase :: Phase Config Config
-simplifyPhase = awaitForever go
+simplifyPhase = for cat go
   where
     go (Config reg ts) =
       let tbl    = tsTable ts
@@ -110,9 +109,7 @@ scoping (Prop id ast) = Prop key ((para scopingAST ast) (key <> "."))
             let key = scope <> makeId id in
             property key (f (key <> "."))
 
-typing :: (MonadError ConfigError m, Functor m)
-       => Scoped
-       -> StateT TypeState m Typed
+typing :: (MonadCatch m, Functor m) => Scoped -> StateT TypeState m Typed
 typing (Prop key ast) = do
   (t, ast1) <- cata typingAST ast
   modify (types t)
@@ -166,9 +163,7 @@ check c@(Equal (px, tx) (py, ty)) =
 unresolved :: Constraint -> RWS TypeTable () [Constraint] T.Text
 unresolved c = fmap (const "") (modify (c:))
 
-checkFail :: (Position, Type)
-          -> (Position, Type)
-          -> RWS TypeTable () a T.Text
+checkFail :: (Position, Type) -> (Position, Type) -> RWS TypeTable () a T.Text
 checkFail (px, symx) (py, symy) = do
   xlabel <- showType symx
   ylabel <- showType symy
@@ -181,14 +176,12 @@ checkFail (px, symx) (py, symy) = do
                         " but having " <> ylabel <>
                         " " <> ypos <> "\n"
 
-checking :: (MonadError ConfigError m)
-         => TypeState
-         -> m [Constraint]
+checking :: MonadCatch m => TypeState -> m [Constraint]
 checking (TypeState types constrs) =
   let action          = fmap mconcat (traverse check constrs)
       (msg, unres, _) = runRWS action types []
       isEmpty x = x == mempty in
-  if isEmpty msg then return unres else throwError (ConfigError msg)
+  if isEmpty msg then return unres else throwM (ConfigError msg)
 
 register :: Typed -> State Register ()
 register (Prop (key, typ) ast) =

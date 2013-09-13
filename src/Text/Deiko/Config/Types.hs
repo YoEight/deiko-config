@@ -5,8 +5,9 @@
 {-# LANGUAGE RankNTypes             #-}
 module Text.Deiko.Config.Types where
 
+import Prelude hiding (catch)
 import Control.Applicative (WrappedMonad (..), (<*), (*>), (<*>), (<$>))
-import Control.Monad.Error (MonadError (..))
+import Control.Monad.Catch (MonadCatch, throwM, catch)
 import Control.Monad.Reader (MonadReader)
 import Data.Char (isDigit)
 import Data.Monoid (Monoid, (<>))
@@ -21,10 +22,8 @@ import Text.Parsec.Text
 import Text.ParserCombinators.Parsec.Char (digit, anyChar, char, string)
 import Text.ParserCombinators.Parsec.Combinator (many1, eof)
 
-class (MonadReader TypeTable m, MonadError ConfigError m) => ConfigCtx m
-
 type Conversion v =
-  forall m. (MonadReader TypeTable m, MonadError ConfigError m)
+  forall m. (MonadCatch m, MonadReader TypeTable m)
   => T.Text
   -> Type
   -> Annoted
@@ -37,10 +36,10 @@ stringValue key typ value =
       _ | same      -> cata go value
         | otherwise ->
           showType typ >>= \typStr ->
-          throwError $ wrongType key "String" typStr
+          throwM $ wrongType key "String" typStr
   where
     go (ASTRING _ s) = return s
-    go (ASUBST _ s)  = throwError (unresolved key s "String")
+    go (ASUBST _ s)  = throwM (unresolved key s "String")
 
 intParsec :: Parsec T.Text () Int
 intParsec = fmap read (many1 digit <* eof)
@@ -72,28 +71,28 @@ boolParsec = (fmap (const True) (string "true")   <|>
 
 parsecValue :: T.Text -> Parsec T.Text () a -> Conversion a
 parsecValue ptyp parser key typ value =
-  catchError (stringValue key typ value) handler >>= \s ->
+  catch (stringValue key typ value) handler >>= \s ->
     let (l, c) = pos value
         upd _  = newPos (show key) l c
         init   = (setPosition . upd) =<< getPosition
-        err e  = throwError $ ConfigError (ctx <> fromString e)
+        err e  = throwM $ ConfigError (ctx <> fromString e)
         result = parse (init >> parser) "" s in
     either (err . show) return result
   where
     ctx = "In context of parsing " <> ptyp <> ": "
-    handler (ConfigError e) = throwError $ ConfigError (ctx <> e)
+    handler (ConfigError e) = throwM $ ConfigError (ctx <> e)
 
 listValue :: Conversion v -> Conversion [v]
 listValue k key typ value = maybe onError ((flip go) value) (listOf typ)
   where
     ctx e typ = "In context of parsing a List[" <> typ <> "]: " <> e
-    onError = showType typ >>= (throwError . wrongType key "List")
+    onError = showType typ >>= (throwM . wrongType key "List")
     go typ (Mu (ALIST _ xs)) =
       let action = unwrapMonad $ traverse (WrapMonad . k key typ) xs
           handler (ConfigError e) =
-            showType typ >>= (throwError . ConfigError . ctx e) in
-      catchError action handler
-    go typ (Mu (ASUBST _ s)) = throwError (unresolved key s "List")
+            showType typ >>= (throwM . ConfigError . ctx e) in
+      catch action handler
+    go typ (Mu (ASUBST _ s)) = throwM (unresolved key s "List")
 
 propertyNotFound :: T.Text -> ConfigError
 propertyNotFound prop = ConfigError ("Property [" <> prop <> "] not found")

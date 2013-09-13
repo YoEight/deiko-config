@@ -23,15 +23,15 @@ module Text.Deiko.Config.Core
   ) where
 
 import Control.Monad.Trans (lift)
-import Control.Monad.Error (ErrorT, throwError)
+import Control.Monad.Catch (MonadCatch, throwM)
 import Control.Monad.Reader (ReaderT (..))
 import Control.Monad.State (get, put, execState)
-import Data.Conduit (($$), await)
 import Data.Foldable (traverse_)
 import qualified Data.IntMap as IM
 import Data.Hashable (hash)
 import qualified Data.Text as T
 import qualified Text.Deiko.Config.Internal as I
+import Pipes (Pipe, yield, await, runEffect, (>->))
 import Text.Deiko.Config.Semantic (Config (..), TypeState (..), typecheck
                                   ,manualSimplify)
 import Text.Deiko.Config.Types (stringValue, intValue, boolValue, listValue
@@ -75,17 +75,16 @@ object = Val . I.object falsePos . fmap go
   where
     go (name := v@(Val value)) = I.property (name, typeof v) value
 
-getValueWithAs :: ( Monad m, Functor m)
+getValueWithAs :: (MonadCatch m, Functor m)
                => Conversion v
                -> [Pair]
                -> T.Text
                -> Config
-               -> ErrorT I.ConfigError m v
+               -> m v
 getValueWithAs k [] key config = getValueAs k key config
-getValueWithAs k xs key config =
-  process $$ (await >>= (lift . getValueAs k key . unJust))
+getValueWithAs k xs key config = runEffect effect
   where
-    unJust (Just x) = x
+    effect = process >-> (await >>= (lift . getValueAs k key))
     toProp (key := v@(Val value)) = (hash key, (typeof v, value))
     props   = fmap toProp xs
     go (hash, tup) =
@@ -97,76 +96,76 @@ getValueWithAs k xs key config =
       let config1 = execState (traverse_ go props) config in
       manualSimplify config1
 
-getValueAs :: Monad m
+getValueAs :: MonadCatch m
            => Conversion v
            -> T.Text
            -> Config
-           -> ErrorT I.ConfigError m v
+           -> m v
 getValueAs k key (Config reg st) =
-  maybe (throwError $ propertyNotFound key) go (IM.lookup (hash key) reg)
+  maybe (throwM $ propertyNotFound key) go (IM.lookup (hash key) reg)
     where
       go (typ, value) = runReaderT (k key typ value) (tsTable st)
 
-getListOf :: Monad m
+getListOf :: MonadCatch m
           => Conversion v
           -> T.Text
           -> Config
-          -> ErrorT I.ConfigError m [v]
+          -> m [v]
 getListOf k = getValueAs (listValue k)
 
-getString :: Monad m
+getString :: MonadCatch m
           => T.Text
           -> Config
-          -> ErrorT I.ConfigError m T.Text
+          -> m T.Text
 getString = getValueAs stringValue
 
-getInt :: Monad m
+getInt :: MonadCatch m
        => T.Text
        -> Config
-       -> ErrorT I.ConfigError m Int
+       -> m Int
 getInt = getValueAs intValue
 
-getBool :: Monad m
+getBool :: MonadCatch m
         => T.Text
         -> Config
-        -> ErrorT I.ConfigError m Bool
+        -> m Bool
 getBool = getValueAs boolValue
 
-getStrings :: Monad m
+getStrings :: MonadCatch m
            => T.Text
            -> Config
-           -> ErrorT I.ConfigError m [T.Text]
+           -> m [T.Text]
 getStrings = getListOf stringValue
 
-getInts :: Monad m
+getInts :: MonadCatch m
         => T.Text
         -> Config
-        -> ErrorT I.ConfigError m [Int]
+        -> m [Int]
 getInts = getListOf intValue
 
-getBools :: Monad m
+getBools :: MonadCatch m
          => T.Text
          -> Config
-         -> ErrorT I.ConfigError m [Bool]
+         -> m [Bool]
 getBools = getListOf boolValue
 
-getStringWith :: (Monad m, Functor m)
+getStringWith :: (MonadCatch m, Functor m)
               => [Pair]
               -> T.Text
               -> Config
-              -> ErrorT I.ConfigError m T.Text
+              -> m T.Text
 getStringWith = getValueWithAs stringValue
 
-getIntWith :: (Monad m, Functor m)
+getIntWith :: (MonadCatch m, Functor m)
               => [Pair]
               -> T.Text
               -> Config
-              -> ErrorT I.ConfigError m Int
+              -> m Int
 getIntWith = getValueWithAs intValue
 
-getBoolWith :: (Monad m, Functor m)
+getBoolWith :: (MonadCatch m, Functor m)
             => [Pair]
             -> T.Text
             -> Config
-            -> ErrorT I.ConfigError m Bool
+            -> m Bool
 getBoolWith = getValueWithAs boolValue

@@ -5,11 +5,11 @@ import Control.Arrow ((&&&))
 import Control.Monad (when)
 import Control.Monad.Trans (lift)
 import Control.Monad.State (StateT, evalStateT, modify, gets)
-import Data.Conduit (Conduit, ConduitM, yield, await)
 import Data.ByteString.Char8 (unpack)
 import Data.Char (isLetter, isDigit)
 import Data.Foldable (Foldable, traverse_)
 import Data.String (IsString (..))
+import Pipes (Pipe, yield, await)
 import Text.Deiko.Config.Internal hiding (makeId)
 
 data StringState = None
@@ -21,12 +21,16 @@ data LexerState = LexerState { lexLine  :: Int
                              , lexBrace :: Int
                              , lexBrack :: Int }
 
-type Lexer m a = StateT LexerState (ConduitM Char Token m) a
+type Lexer m a = StateT LexerState (Pipe (Maybe Char) Token m) a
 
-lexer :: Monad m => Conduit Char m Token
-lexer = evalStateT (recv step nop) start
+lexer :: Monad m => Pipe (Maybe Char) Token m r
+lexer = do
+  evalStateT (recv step (return ())) start
+  lexer
   where
     start = LexerState 1 1 0 0
+
+    eval m = evalStateT m start
 
 make :: Monad m => Sym -> Lexer m ()
 make s = do
@@ -35,7 +39,7 @@ make s = do
 
 recv :: Monad m => (Char -> Lexer m ()) -> Lexer m () -> Lexer m ()
 recv k eof = do
-  input <- lift await
+  input <- lift $ await
   maybe (eof >> end) k input
   where
     end = do
@@ -47,10 +51,10 @@ recv k eof = do
 step :: Monad m => Char -> Lexer m ()
 step ' '  = make SPACE    >> incrCol  >> stripSpaces step nop
 step '\n' = make NEWLINE  >> incrLine >> setCol 1 >> stripNewlines step nop
-step '.'  = make DOT      >> incrCol  >> recv step nop
-step '='  = make EQUAL    >> incrCol  >> recv step nop
-step ':'  = make EQUAL    >> incrCol  >> recv step nop
-step ','  = make COMMA    >> incrCol  >> recv step nop
+step '.'  = make DOT      >> incrCol >> recv step nop
+step '='  = make EQUAL    >> incrCol >> recv step nop
+step ':'  = make EQUAL    >> incrCol >> recv step nop
+step ','  = make COMMA    >> incrCol >> recv step nop
 step '#'  = stripComment
 step '"'  = stringStep
 step '$'  = substStep
@@ -226,40 +230,40 @@ stripSpaces k f = recv go f
     go ' ' = incrCol >> stripSpaces k f
     go x   = k x
 
-incrLineBy :: Monad m => Int -> StateT LexerState m ()
+incrLineBy :: Monad m => Int -> Lexer m ()
 incrLineBy n = modify $ \s@LexerState{lexLine=i} -> s{lexLine=i + n}
 
-incrLine :: Monad m => StateT LexerState m ()
+incrLine :: Monad m => Lexer m ()
 incrLine = incrLineBy 1
 
-onCol :: Monad m => (Int -> Int) -> StateT LexerState m ()
+onCol :: Monad m => (Int -> Int) -> Lexer m ()
 onCol f = modify $ \s@LexerState{lexCol=i} -> s{lexCol=f i}
 
-incrColBy :: Monad m => Int -> StateT LexerState m ()
+incrColBy :: Monad m => Int -> Lexer m ()
 incrColBy = onCol . (+)
 
-incrCol :: Monad m => StateT LexerState m ()
+incrCol :: Monad m => Lexer m ()
 incrCol = incrColBy 1
 
-setCol :: Monad m => Int -> StateT LexerState m ()
+setCol :: Monad m => Int -> Lexer m ()
 setCol = onCol . const
 
-onBrace :: Monad m => (Int -> Int) -> StateT LexerState m ()
+onBrace :: Monad m => (Int -> Int) -> Lexer m ()
 onBrace f = modify $ \s@LexerState{lexBrace=i} -> s{lexBrace=f i}
 
-incrBrace :: Monad m => StateT LexerState m ()
+incrBrace :: Monad m => Lexer m ()
 incrBrace = onBrace (+1)
 
-decrBrace :: Monad m => StateT LexerState m ()
+decrBrace :: Monad m => Lexer m ()
 decrBrace = onBrace (\x -> x - 1)
 
-onBracket :: Monad m => (Int -> Int) -> StateT LexerState m ()
+onBracket :: Monad m => (Int -> Int) -> Lexer m ()
 onBracket k = modify $ \s@LexerState{lexBrack=i} -> s{lexBrack=k i}
 
-incrBracket :: Monad m => StateT LexerState m ()
+incrBracket :: Monad m => Lexer m ()
 incrBracket = onBracket (+1)
 
-decrBracket :: Monad m => StateT LexerState m ()
+decrBracket :: Monad m => Lexer m ()
 decrBracket = onBracket (\x -> x - 1)
 
 trim :: String -> String

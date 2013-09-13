@@ -4,14 +4,15 @@ module Text.Deiko.Config.Parser where
 
 import Control.Applicative ((<*>), (<$>))
 import Control.Monad (void)
+import Control.Monad.Catch (MonadCatch, throwM)
 import Control.Monad.Error (ErrorT, throwError, lift)
 import Control.Monad.Free (Free, wrap)
 import Control.Monad.Free.Church (F, fromF)
-import Data.Conduit (Conduit, await, yield)
 import Data.Foldable (traverse_, foldMap)
 import Data.Monoid (Monoid, (<>))
 import Data.String (IsString (..))
 import qualified Data.Text as T
+import Pipes (Pipe, yield, await)
 import Text.Deiko.Config.Internal
 import Text.Deiko.Config.Util
 
@@ -193,15 +194,13 @@ parseValue = loop =<< withLook go
         (Elm _ _ RBRACK) -> return v
         _                -> fmap (Mu . AMERGE v) parseValue
 
-recv :: Monad m => (Token -> Conduit Token m a) -> Conduit Token m a
-recv k = await >>= \t -> maybe (error "Exhausted source") k t
+recv :: Monad m => (Token -> Pipe Token a m r) -> Pipe Token a m r
+recv k = await >>= k
 
-makeParser :: Monad m
-           => Free LALR a
-           -> Conduit Token (ErrorT ConfigError m) a
+makeParser :: MonadCatch m => Free LALR a -> Pipe Token a m r
 makeParser instr = cataFree pure impure instr $ Nothing
   where
-    pure a _ = yield a
+    pure a _ = yield a >> makeParser instr
 
     impure (Shift k)     = shifting k
     impure (LookAhead k) = looking k
@@ -215,7 +214,7 @@ makeParser instr = cataFree pure impure instr $ Nothing
       where
         go t = k t $ (Just t)
 
-    failing e _ = lift $ throwError (ConfigError e)
+    failing e _ = lift $ throwM (ConfigError e)
 
 unexpected :: Token -> T.Text
 unexpected (Elm l c sym) =
@@ -225,6 +224,5 @@ unexpected (Elm l c sym) =
       line   = fromString $ show l
       col    = fromString $ show c
 
-parser :: Monad m
-       => Conduit Token (ErrorT ConfigError m) [Untyped]
+parser :: MonadCatch m => Pipe Token [Untyped] m r
 parser = makeParser (fromF parseProperties)
