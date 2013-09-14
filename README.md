@@ -68,28 +68,23 @@ reason: You can't merge Lists of different types
 ##Example
 
 ```haskell
-import Control.Monad.Trans (liftIO)
-import Control.Monad.Error (runErrorT)
 import Text.Deiko.Config
 
 data Foo = Foo { fooPort :: Int, fooAddr :: String }
 
 main = do
-  res <- runErrorT loadFooProps
-  either (error . configMsg) handleBar res
+  foo <- loadFooProps
+  withFoo foo
  
   where
     loadFooProps = do
       config <- loadFile "conf/app.conf"
       port   <- getInt "foo.port" config
       addr   <- getString "foo.addr" config
-      liftIO $ makeSomethingUseful (Foo port addr)
-      
-makeSomethingUseful :: Foo -> IO Bar
-makeSomethingUseful = ...
+      return (Foo port addr)
 
-handleBar :: Bar -> IO ()
-handleBar = ...
+withFoo :: Foo -> IO ()
+withFoo = ...
 
 ```
 
