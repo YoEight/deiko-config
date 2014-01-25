@@ -37,6 +37,8 @@ import Text.Deiko.Config.Semantic (Config (..), TypeState (..), typecheck
 import Text.Deiko.Config.Types (stringValue, intValue, boolValue, listValue
                                ,propertyNotFound, Conversion)
 
+-- import Deiko.Config.Internal.Lexer
+
 data CString = CString
 data CList a = CList a
 data CObject = CObject
