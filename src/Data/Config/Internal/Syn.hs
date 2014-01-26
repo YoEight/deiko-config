@@ -37,6 +37,7 @@ type LExpr id = Located (Expr id)
 data Expr id = Lit (Lit id)
              | List PostTcType [LExpr id]
              | Include id
+             | Subst id
              | Merge (LExpr id) (LExpr id)
              | Object [Bind id]
 
@@ -44,6 +45,7 @@ instance Show id => Show (Expr id) where
     show (Lit l)     = "(Lit " ++ show l ++ ")"
     show (List _ xs) = "(List " ++ show xs ++ ")"
     show (Include i) = "(Include " ++ show i ++ ")"
+    show (Subst s)   = "(Subst " ++ show s ++ ")"
     show (Merge a b) = "(Merge " ++ show a ++ " " ++ show b ++ ")"
     show (Object xs) = "(Object " ++ show xs ++ ")"
 

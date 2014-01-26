@@ -120,12 +120,28 @@ parseId = shift >>= go
     go l                    = expected l "an id"
 
 parseLExpr :: Parser (LExpr T.Text)
-parseLExpr = lookahead >>= go
+parseLExpr = do
+    t     <- lookahead
+    e     <- go t
+    L _ t <- lookahead
+    case t of
+        ITspace -> deeper e
+        _       -> return e
+
   where
+    deeper e@(L sp _) = do
+        shift
+        t <- lookahead
+        if not (isExpr t)
+            then return e
+            else do
+            e1 <- parseLExpr
+            return $ L sp (Merge e e1)
     go t
         | isObrack t = parseList
         | isLit t    = parseLit
         | isObrace t = parseObject
+        | isDollar t = parseSubst
         | otherwise  = failure ("Unexpected " ++ show t)
 
 parseLit :: Parser (LExpr T.Text)
@@ -192,6 +208,14 @@ parseObject = do
                 bs <- deeper
                 return (b:bs)
 
+parseSubst :: Parser (LExpr T.Text)
+parseSubst = do
+    L sp _  <- parseDollar
+    parseObrace
+    s       <- parseId
+    parseCbrace
+    return $ L sp (Subst s)
+
 skipSpaceOrNewline :: Parser ()
 skipSpaceOrNewline = lookahead >>= go
   where
@@ -249,6 +273,13 @@ parseComma = lookahead >>= go
     go (L _ ITcomma) = shift >> return ()
     go l             = expected l "a ','"
 
+parseDollar :: Parser Token
+parseDollar = shift >>= go
+  where
+    go t
+        | isDollar t = return t
+        | otherwise  = expected t "a '$'"
+
 parseEOF :: Parser ()
 parseEOF = lookahead >>= go
   where
@@ -282,6 +313,17 @@ isObrace _              = False
 isCbrace :: Token -> Bool
 isCbrace (L _ ITcbrace) = True
 isCbrace _              = False
+
+isDollar :: Token -> Bool
+isDollar (L _ ITdollar) = True
+isDollar _              = False
+
+isExpr :: Token -> Bool
+isExpr t =
+    isObrack t ||
+    isLit t    ||
+    isObrace t ||
+    isDollar t
 
 mergeSSOneLine :: SrcSpan -> SrcSpan -> SrcSpan
 mergeSSOneLine (SrcSpanOneLine n l s _) (SrcSpanOneLine _ _ _ e) =
