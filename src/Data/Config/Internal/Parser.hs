@@ -108,10 +108,19 @@ parseBind :: Parser (Bind T.Text)
 parseBind = do
     pId <- parseId
     skipSpaceOrNewline
-    parseEqual
-    skipSpaceOrNewline
-    exp <- parseLExpr
+    exp <- inner
     return $ PropBind pId exp
+  where
+    equalExpr = do
+        parseEqual
+        skipSpaceOrNewline
+        parseLExpr
+
+    inner = do
+        t <- lookahead
+        if isObrace t
+            then parseObject
+            else equalExpr
 
 parseId :: Parser T.Text
 parseId = shift >>= go
