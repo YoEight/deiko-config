@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Data.Config.Internal.Parser
@@ -22,8 +21,6 @@ import Data.Config.Internal.Lexer
 import Data.Config.Internal.SrcLoc
 import Data.Config.Internal.Syn
 import Data.Config.Internal.Token
-
-import Debug.Trace
 
 newtype Parser a =
     Parser { unParser :: Maybe Token -> Lexer (Maybe Token, Either String a) }
@@ -72,32 +69,33 @@ lalrParser = do
     either parserFail return e_a
 
 parseModule :: Parser (Module T.Text)
-parseModule = do
-   xs <- parseDecls
-   return $ Module [] xs
+parseModule = fmap (Module []) parseDecls
 
 parseDecls :: Parser [Decl T.Text]
 parseDecls = lookahead >>= go
   where
-    go (L _ ITeof) = [] <$ shift
-    go _           = do
+    go t
+        | isEOF t   = [] <$ shift
+        | otherwise = do
+            d  <- parseDecl
+            ds <- deeper
+            return (d:ds)
+
+    deeper = do
+        t <- lookahead
+        case () of
+            _ | isEOF t     -> [] <$ shift
+              | isSpace t   -> skipSpaceOrNewline >> deeper
+              | isNewline t -> skipSpaceOrNewline >> parseDecls
+              | isComma t   -> onComma
+
+    onComma = do
+        shift
+        skipSpaceOrNewline
         d  <- parseDecl
         ds <- deeper
         return (d:ds)
 
-    deeper = do
-        L _ t <- lookahead
-        case t of
-            ITeof     -> shift >> return []
-            ITspace   -> skipSpaceOrNewline >> deeper
-            ITnewline -> skipSpaceOrNewline >> parseDecls
-            ITcomma   -> do
-                shift
-                skipSpaceOrNewline
-                d  <- parseDecl
-                ds <- deeper
-                return (d:ds)
-    eof = [] <$ parseEOF
 parseDecl :: Parser (Decl T.Text)
 parseDecl = parseValD
 
@@ -130,13 +128,11 @@ parseId = shift >>= go
 
 parseLExpr :: Parser (LExpr T.Text)
 parseLExpr = do
-    t     <- lookahead
-    e     <- go t
-    L _ t <- lookahead
-    case t of
-        ITspace -> deeper e
-        _       -> return e
-
+    e  <- lookahead >>= go
+    t2 <- lookahead
+    if isSpace t2
+        then deeper e
+        else return e
   where
     deeper e@(L sp _) = do
         shift
@@ -168,26 +164,28 @@ parseList = do
   where
     parseExprList = do
         skipSpaceOrNewline
-        L se t <- lookahead
-        case t of
-            ITcbrack -> return []
-            _        -> (:) <$> parseLExpr <*> go
+        t <- lookahead
+        if isCbrack t
+            then return []
+            else (:) <$> parseLExpr <*> go
 
     go = do
         skipSpaceOrNewline
-        L _ t <- lookahead
-        case t of
-            ITcbrack -> return []
-            ITcomma  -> do
-                shift
-                skipSpaceOrNewline
-                e  <- parseLExpr
-                es <- go
-                return (e:es)
-            _ ->
+        t <- lookahead
+        case () of
+            _ | isCbrack t -> return []
+              | isComma t  -> onComma
+              | otherwise  ->
                 let msg = "Unexpected " ++ show t ++
                           " when constructing a list" in
                 failure msg
+
+    onComma = do
+        shift
+        skipSpaceOrNewline
+        e  <- parseLExpr
+        es <- go
+        return (e:es)
 
 parseObject :: Parser (LExpr T.Text)
 parseObject = do
@@ -230,21 +228,23 @@ parseSubst = do
 skipSpaceOrNewline :: Parser ()
 skipSpaceOrNewline = lookahead >>= go
   where
-    go (L _ ITspace)   = shift >> skipSpaceOrNewline
-    go (L _ ITnewline) = shift >> skipSpaceOrNewline
-    go _               = return ()
+    go t
+        | isSpace t || isNewline t = shift >> skipSpaceOrNewline
+        | otherwise                = return ()
 
 parseObrack :: Parser Token
 parseObrack = shift >>= go
   where
-    go t@(L _ ITobrack) = return t
-    go l                = expected l "a ']'"
+    go t
+        | isObrack t = return t
+        | otherwise  = expected t "a '['"
 
 parseCbrack :: Parser Token
 parseCbrack = shift >>= go
   where
-    go t@(L _ ITcbrack) = return t
-    go l                = expected l "a '['"
+    go t
+        | isCbrack t = return t
+        | otherwise  = expected t "a ']'"
 
 parseObrace :: Parser Token
 parseObrace = shift >>= go
@@ -260,29 +260,19 @@ parseCbrace = shift >>= go
         | isCbrace t = return t
         | otherwise  = expected t "a '}'"
 
-parseSpace :: Parser ()
-parseSpace = lookahead >>= go
-  where
-    go (L _ ITspace) = shift >> return ()
-    go l             = expected l "a space character"
-
-parseNewline :: Parser ()
-parseNewline = lookahead >>= go
-  where
-    go (L _ ITnewline) = shift >> return ()
-    go l               = expected l "newline"
-
 parseEqual :: Parser ()
 parseEqual = shift >>= go
   where
-    go (L _ ITequal) = return ()
-    go l             = expected l "a '='"
+    go t
+        | isEqual t = return ()
+        | otherwise = expected t "a '='"
 
 parseComma :: Parser ()
-parseComma = lookahead >>= go
+parseComma = shift >>= go
   where
-    go (L _ ITcomma) = shift >> return ()
-    go l             = expected l "a ','"
+    go t
+        | isComma t = return ()
+        | otherwise = expected t "a ','"
 
 parseDollar :: Parser Token
 parseDollar = shift >>= go
@@ -290,12 +280,6 @@ parseDollar = shift >>= go
     go t
         | isDollar t = return t
         | otherwise  = expected t "a '$'"
-
-parseEOF :: Parser ()
-parseEOF = lookahead >>= go
-  where
-    go (L _ ITeof) = shift >> return ()
-    go _           = failure "Expected end of file"
 
 isVarId :: Token -> Bool
 isVarId (L _ (ITvarid _)) = True
@@ -313,9 +297,17 @@ isSpace :: Token -> Bool
 isSpace (L _ ITspace) = True
 isSpace _             = False
 
+isNewline :: Token -> Bool
+isNewline (L _ ITnewline) = True
+isNewline _               = False
+
 isObrack :: Token -> Bool
 isObrack (L _ ITobrack) = True
 isObrack _              = False
+
+isCbrack :: Token -> Bool
+isCbrack (L _ ITcbrack) = True
+isCbrack _              = False
 
 isObrace :: Token -> Bool
 isObrace (L _ ITobrace) = True
@@ -329,16 +321,24 @@ isDollar :: Token -> Bool
 isDollar (L _ ITdollar) = True
 isDollar _              = False
 
+isEqual :: Token -> Bool
+isEqual (L _ ITequal) = True
+isEqual _             = False
+
+isComma :: Token -> Bool
+isComma (L _ ITcomma) = True
+isComma _             = False
+
+isEOF :: Token -> Bool
+isEOF (L _ ITeof) = True
+isEOF _           = False
+
 isExpr :: Token -> Bool
 isExpr t =
     isObrack t ||
     isLit t    ||
     isObrace t ||
     isDollar t
-
-mergeSSOneLine :: SrcSpan -> SrcSpan -> SrcSpan
-mergeSSOneLine (SrcSpanOneLine n l s _) (SrcSpanOneLine _ _ _ e) =
-    SrcSpanOneLine n l s e
 
 expected :: Token -> String -> Parser a
 expected (L l t) e = failure msg
