@@ -154,20 +154,21 @@ parseList :: Parser (LExpr T.Text)
 parseList = do
     L sp _ <- parseObrack
     xs     <- parseExprList
-    return $ L sp (List undefined xs)
+    L ep _ <- parseCbrack
+    return $ L (mkPointSpan sp ep) (List undefined xs)
   where
     parseExprList = do
         skipSpaceOrNewline
-        L _ t <- lookahead
+        L se t <- lookahead
         case t of
-            ITcbrack -> shift >> return []
+            ITcbrack -> return []
             _        -> (:) <$> parseLExpr <*> go
 
     go = do
         skipSpaceOrNewline
         L _ t <- lookahead
         case t of
-            ITcbrack -> shift >> return []
+            ITcbrack -> return []
             ITcomma  -> do
                 shift
                 skipSpaceOrNewline
@@ -183,13 +184,14 @@ parseObject :: Parser (LExpr T.Text)
 parseObject = do
     L sp _ <- parseObrace
     ds     <- parseBinds
-    return $ L sp (Object ds)
+    L ep _ <- parseCbrace
+    return $ L (mkPointSpan sp ep) (Object ds)
   where
     parseBinds = do
         skipSpaceOrNewline
         L _ t <- lookahead
         case t of
-            ITcbrace -> [] <$ shift
+            ITcbrace -> return []
             _ -> do
                 b  <- parseBind
                 bs <- deeper
@@ -198,7 +200,7 @@ parseObject = do
     deeper = do
         L _ t <- lookahead
         case t of
-            ITcbrace  -> [] <$ shift
+            ITcbrace  -> return []
             ITspace   -> skipSpaceOrNewline >> deeper
             ITnewline -> skipSpaceOrNewline >> parseBinds
             ITcomma   -> do
@@ -213,8 +215,8 @@ parseSubst = do
     L sp _  <- parseDollar
     parseObrace
     s       <- parseId
-    parseCbrace
-    return $ L sp (Subst s)
+    L ep _  <- parseCbrace
+    return $ L (mkPointSpan sp ep) (Subst s)
 
 skipSpaceOrNewline :: Parser ()
 skipSpaceOrNewline = lookahead >>= go

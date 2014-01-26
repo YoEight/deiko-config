@@ -36,6 +36,11 @@ data SrcSpan
       , ssCol     :: !Int
       }
 
+mkPointSpan :: SrcSpan -> SrcSpan -> SrcSpan
+mkPointSpan (SrcSpanPoint n sl sc) (SrcSpanPoint _ el ec)
+    | sl == el  = SrcSpanOneLine n sl sc ec
+    | otherwise = SrcSpanMultiLine n sl el sc ec
+
 instance (Show l, Show e) => Show (GenLocated l e) where
     show (L l e) = show l ++ " " ++ show e
 
