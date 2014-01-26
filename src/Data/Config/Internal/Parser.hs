@@ -196,26 +196,28 @@ parseObject = do
   where
     parseBinds = do
         skipSpaceOrNewline
-        L _ t <- lookahead
-        case t of
-            ITcbrace -> return []
-            _ -> do
-                b  <- parseBind
-                bs <- deeper
-                return (b:bs)
+        t <- lookahead
+        if isCbrace t
+            then return []
+            else onComma
+
+    onComma = do
+        b  <- parseBind
+        bs <- deeper
+        return (b:bs)
 
     deeper = do
-        L _ t <- lookahead
-        case t of
-            ITcbrace  -> return []
-            ITspace   -> skipSpaceOrNewline >> deeper
-            ITnewline -> skipSpaceOrNewline >> parseBinds
-            ITcomma   -> do
-                shift
-                skipSpaceOrNewline
-                b  <- parseBind
-                bs <- deeper
-                return (b:bs)
+        t <- lookahead
+        case () of
+            _ | isCbrace t  -> return []
+              | isSpace t   -> skipSpaceOrNewline >> deeper
+              | isNewline t -> skipSpaceOrNewline >> parseBinds
+              | isComma t   -> do
+                  shift
+                  skipSpaceOrNewline
+                  b  <- parseBind
+                  bs <- deeper
+                  return (b:bs)
 
 parseSubst :: Parser (LExpr T.Text)
 parseSubst = do
