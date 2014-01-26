@@ -89,7 +89,7 @@ parseDecls = lookahead >>= go
         L _ t <- lookahead
         case t of
             ITeof     -> shift >> return []
-            ITspace   -> skipSpaceOrNewline >> eof
+            ITspace   -> skipSpaceOrNewline >> deeper
             ITnewline -> skipSpaceOrNewline >> parseDecls
             ITcomma   -> do
                 shift
@@ -125,6 +125,7 @@ parseLExpr = lookahead >>= go
     go t
         | isObrack t = parseList
         | isLit t    = parseLit
+        | isObrace t = parseObject
         | otherwise  = failure ("Unexpected " ++ show t)
 
 parseLit :: Parser (LExpr T.Text)
@@ -162,6 +163,35 @@ parseList = do
                           " when constructing a list" in
                 failure msg
 
+parseObject :: Parser (LExpr T.Text)
+parseObject = do
+    L sp _ <- parseObrace
+    ds     <- parseBinds
+    return $ L sp (Object ds)
+  where
+    parseBinds = do
+        skipSpaceOrNewline
+        L _ t <- lookahead
+        case t of
+            ITcbrace -> [] <$ shift
+            _ -> do
+                b  <- parseBind
+                bs <- deeper
+                return (b:bs)
+
+    deeper = do
+        L _ t <- lookahead
+        case t of
+            ITcbrace  -> [] <$ shift
+            ITspace   -> skipSpaceOrNewline >> deeper
+            ITnewline -> skipSpaceOrNewline >> parseBinds
+            ITcomma   -> do
+                shift
+                skipSpaceOrNewline
+                b  <- parseBind
+                bs <- deeper
+                return (b:bs)
+
 skipSpaceOrNewline :: Parser ()
 skipSpaceOrNewline = lookahead >>= go
   where
@@ -180,6 +210,20 @@ parseCbrack = shift >>= go
   where
     go t@(L _ ITcbrack) = return t
     go l                = expected l "a '['"
+
+parseObrace :: Parser Token
+parseObrace = shift >>= go
+  where
+    go t
+        | isObrace t = return t
+        | otherwise  = expected t "a '{'"
+
+parseCbrace :: Parser Token
+parseCbrace = shift >>= go
+  where
+    go t
+        | isCbrace t = return t
+        | otherwise  = expected t "a '}'"
 
 parseSpace :: Parser ()
 parseSpace = lookahead >>= go
@@ -223,10 +267,6 @@ isLit :: Token -> Bool
 isLit (L _ (ITstring _)) = True
 isLit t                  = isVarId t
 
-isEqual :: Token -> Bool
-isEqual (L _ ITequal) = True
-isEqual _             = False
-
 isSpace :: Token -> Bool
 isSpace (L _ ITspace) = True
 isSpace _             = False
@@ -235,21 +275,13 @@ isObrack :: Token -> Bool
 isObrack (L _ ITobrack) = True
 isObrack _              = False
 
-isCbrack :: Token -> Bool
-isCbrack (L _ ITcbrack) = True
-isCbrack _              = False
+isObrace :: Token -> Bool
+isObrace (L _ ITobrace) = True
+isObrace _              = False
 
-isComma :: Token -> Bool
-isComma (L _ ITcomma) = True
-isComma _             = False
-
-isNewline :: Token -> Bool
-isNewline (L _ ITnewline) = True
-isNewline _               = False
-
-isEOF :: Token -> Bool
-isEOF (L _ ITeof) = True
-isEOF _           = False
+isCbrace :: Token -> Bool
+isCbrace (L _ ITcbrace) = True
+isCbrace _              = False
 
 mergeSSOneLine :: SrcSpan -> SrcSpan -> SrcSpan
 mergeSSOneLine (SrcSpanOneLine n l s _) (SrcSpanOneLine _ _ _ e) =
