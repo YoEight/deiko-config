@@ -126,7 +126,7 @@ lexNewline = do
 lexIdentifier :: Lexer Token
 lexIdentifier = do
     poss <- getPosition
-    xs   <- chainl1 (many1 letter) aDot
+    xs   <- chainl1 aId aDot
     pose <- getPosition
     let name = sourceName poss
         line = sourceLine poss
@@ -138,6 +138,10 @@ lexIdentifier = do
     return tok
   where
     aDot = fmap (\c a b -> a ++ (c:b)) (char '.')
+    aId = do
+        x  <- letter
+        xs <- many (alphaNum <|> oneOf "-_")
+        return (x:xs)
 
 lexString :: Lexer Token
 lexString = try multi <|> simple <|> anythingElse

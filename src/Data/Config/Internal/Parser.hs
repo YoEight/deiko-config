@@ -10,7 +10,7 @@
 -- Portability :  non-portable
 --
 ----------------------------------------------------------------------------
-module Data.Config.Internal.Parser where
+module Data.Config.Internal.Parser (lalrParser) where
 
 import Control.Monad (ap)
 import Control.Applicative hiding ((<|>), optional)
