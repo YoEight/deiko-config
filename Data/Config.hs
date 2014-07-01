@@ -11,6 +11,81 @@
 -- Stability : provisional
 -- Portability : non-portable
 --
+-- Config is a small and typesafe configuration library. It provides
+-- good error messages and comes with a bottom-up typechecker in order to catch
+-- more configuration errors.
+--
+-- Here some use-cases:
+--
+-- >>> foo = ["bar", { baz : 42 }]
+-- foo:1:8-13: Expecting String but having Object
+--
+-- Reason: List has only one inner type
+--
+-- >>> foo = ["bar"] [{ baz : 42 }]
+-- foo:1:7-14: Expecting List[String] but having List[Object]
+--
+-- Reason: You can't merge Lists of different types
+--
+-- It uses <https://github.com/typesafehub/config Typesafe-config>
+-- format: HOCON. HOCON stands for Human-Optimized
+-- Config Object Notation. It's basically a JSON superset
+--
+-- Here's an example:
+--
+-- > -- app.conf
+-- > # This is a comment
+-- >
+-- > foo.bar = ${toto}
+-- >
+-- > toto = false
+-- >
+-- > rawString = """
+-- >             This is a multi-
+-- >             lines String
+-- >             """
+-- >
+-- > another.string = "I'm a String"
+-- >
+-- > one.more.string = one more string
+-- >
+-- > nested {
+-- >    list: [ one
+-- >          , 1
+-- >          , "both"]
+-- >
+-- >    homing = {
+-- >      pass: { b: feez } { a: "Prop"}
+-- >    }
+-- >
+-- >    another: [1,2,3] [4,5,6]
+-- > }
+--
+-- How to use:
+--
+-- @
+-- -- Example.hs
+-- {-# LANGUAGE OverloadedStrings #-}
+-- import Data.Config
+-- import Data.Text (Text)
+--
+-- data Foo = Foo { fooPort :: 'Int', fooAddr :: 'Text' }
+--
+-- main :: 'IO' ()
+-- main = do
+--   foo <- loadFooProps
+--   withFoo foo
+--
+--   where
+--     loadFooProps = do
+--       config <- 'loadConfig' "conf/baz.conf"
+--       port   <- 'getInteger' "foo.port" config
+--       addr   <- 'getString' "foo.addr" config
+--       return (Foo port addr)
+--
+-- withFoo :: Foo -> 'IO' ()
+-- withFoo = ...
+-- @
 --------------------------------------------------------------------------------
 module Data.Config
     ( Config
@@ -54,59 +129,8 @@ import Data.Config.Internal.Rename
 import Data.Config.Internal.Typecheck
 import Data.Config.Internal.Typed
 
-{-  Here's an example:
-
-> -- app.conf
-> # This is a comment
->
-> foo.bar = ${toto}
->
-> toto = false
->
-> rawString = """
->             This is a multi-
->             lines String
->             """
->
-> another.string = "I'm a String"
->
-> one.more.string = one more string
->
-> nested {
->    list: [ one
->          , 1
->          , "both"]
->
->    homing = {
->      pass: { b: feez } { a: "Prop"}
->    }
->
->    another: [1,2,3] [4,5,6]
-> }
-
-> -- Example.hs
-> {-# LANGUAGE OverloadedStrings #-}
->
-> import Data.Config
->
-> data Foo = Foo { fooPort :: Int, fooAddr :: String }
->
-> main :: IO ()
-> main = do
->   foo <- loadFooProps
->   withFoo foo
->
->   where
->     loadFooProps = do
->       config <- 'loadConfig' "conf/baz.conf"
->       port   <- 'getInteger' "foo.port" config
->       addr   <- 'getString' "foo.addr" config
->       return (Foo port addr)
->
-> withFoo :: Foo -> IO ()
-> withFoo = ...
--}
 --------------------------------------------------------------------------------
+-- | Configuration data
 newtype Config = Config { unConf :: Reg }
 
 --------------------------------------------------------------------------------
@@ -136,7 +160,7 @@ loadConfig path
              Right reg -> return $ Config reg
 
 --------------------------------------------------------------------------------
--- | API
+-- API
 --------------------------------------------------------------------------------
 getString :: MonadThrow m => Text -> Config -> m Text
 getString key conf = getValue string key conf
@@ -178,7 +202,7 @@ getParsecs :: MonadThrow m
 getParsecs action key conf = getValues (parsec action) key conf
 
 --------------------------------------------------------------------------------
--- | Utilities
+-- Utilities
 --------------------------------------------------------------------------------
 getValue :: MonadThrow m => Extractor a -> Text -> Config -> m a
 getValue extr key conf
