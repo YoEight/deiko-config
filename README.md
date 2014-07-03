@@ -50,7 +50,7 @@ Here some use-cases:
 You'll have:
 
 ```
-Expected String (line: 1, col: 8) but having Object (line: 1, col: 15)
+foo:1:8-13: Expecting String but having Object
 ```
 
 reason: List has only one inner type
@@ -60,7 +60,7 @@ reason: List has only one inner type
 You'll have:
 
 ```
-Expected List[String] (line: 1, col: 7) but having List[Object] (line: 1, col: 15)
+foo:1:7-14: Expecting List[String] but having List[Object]
 ```
 
 reason: You can't merge Lists of different types
@@ -68,18 +68,21 @@ reason: You can't merge Lists of different types
 ##Example
 
 ```haskell
-import Text.Deiko.Config
+{-# LANGUAGE OverloadedStrings #-}
+import Data.Config
+import Data.Text (Text)
 
-data Foo = Foo { fooPort :: Int, fooAddr :: String }
+data Foo = Foo { fooPort :: Int, fooAddr :: Text }
 
+main :: IO ()
 main = do
   foo <- loadFooProps
   withFoo foo
- 
+
   where
     loadFooProps = do
-      config <- loadFile "conf/app.conf"
-      port   <- getInt "foo.port" config
+      config <- loadConfig "conf/baz.conf"
+      port   <- getInteger "foo.port" config
       addr   <- getString "foo.addr" config
       return (Foo port addr)
 
