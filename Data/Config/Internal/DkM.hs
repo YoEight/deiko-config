@@ -19,6 +19,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.State
+import Prelude
 
 --------------------------------------------------------------------------------
 newtype DkM e s a = DkM { runDkM :: e -> s -> IO (a, s) }

@@ -18,6 +18,7 @@ module Data.Config.Internal.Typecheck (typecheck) where
 import Control.Exception
 import Data.Foldable
 import Data.Typeable
+import Prelude
 
 --------------------------------------------------------------------------------
 import           Control.Monad.State.Strict
