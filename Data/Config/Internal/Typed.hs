@@ -36,14 +36,14 @@ data Type
 data TypeLit
     = StringLit
     | ObjectLit
-    deriving Eq
+    deriving (Eq, Show)
 
 --------------------------------------------------------------------------------
 data Typed
     = Typed
     { typedType  :: Type
     , typedScope :: Scoped
-    }
+    } deriving Show
 
 --------------------------------------------------------------------------------
 instance Show Type where
