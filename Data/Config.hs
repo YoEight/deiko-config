@@ -90,6 +90,7 @@
 module Data.Config
     ( Config
     , loadConfig
+    , loadNotInlinedConfig
     , getInteger
     , getParsec
     , getString
@@ -110,6 +111,7 @@ import Data.Typeable
 import           Control.Monad.Catch
 import qualified Data.Map         as M
 import           Data.Text (Text, unpack)
+import qualified Data.Text as T
 import qualified Data.Text.IO     as T
 import           Text.Parsec (Parsec)
 import qualified Text.Parsec.Char as Char
@@ -158,6 +160,49 @@ loadConfig path
          case action of
              Left e    -> throwM e
              Right reg -> return $ Config reg
+
+--------------------------------------------------------------------------------
+-- | Loads a config without flattening any property object out.
+loadNotInlinedConfig :: (MonadIO m, MonadThrow m) => FilePath -> m Config
+loadNotInlinedConfig path
+    = do txt <- liftIO $ T.readFile path
+         pse <- parse path txt
+         let action
+                 = do ps         <- pse
+                      (tys, pts) <- typecheck $ rename ps
+                      return $ register tys pts
+         case action of
+             Left e    -> throwM e
+             Right reg -> return . Config . removeInlining . simplifyReg $ reg
+
+--------------------------------------------------------------------------------
+simplifyReg :: Reg -> Reg
+simplifyReg reg
+    = reg { regAST = fmap (simplify reg) (regAST reg) }
+
+--------------------------------------------------------------------------------
+removeInlining :: Reg -> Reg
+removeInlining reg
+    = reg { regAST = M.mapMaybeWithKey go (regAST reg) }
+  where
+    containsDot = T.any ('.' ==)
+
+    go key value
+        | containsDot key = Nothing
+        | otherwise       = Just $ unscoped key value
+
+    unscoped scope ast =
+        case astExpr ast of
+            OBJECT ps ->
+                let inner (Prop name child) =
+                        case T.stripPrefix (scope <> ".") name of
+                            Nothing ->
+                                Prop name (unscoped scope child)
+                            Just stripped ->
+                                let newScope = scope <> "." <> stripped in
+                                Prop stripped (unscoped newScope child) in
+                ast { astExpr = OBJECT (fmap inner ps) }
+            _ -> ast
 
 --------------------------------------------------------------------------------
 -- API
